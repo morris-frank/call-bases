@@ -87,8 +87,36 @@
       font-weight: 400;
     }
 
+    #rateRow {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 7px;
+      cursor: pointer;
+    }
+
+    #rateThrottle {
+      display: none;
+      color: var(--fg);
+      line-height: 0;
+    }
+
+    #rateRow.slow #rateThrottle {
+      display: block;
+    }
+
+    #rateThrottle svg {
+      display: block;
+      width: 13px;
+      height: 13px;
+    }
+
     #rateText {
       color: var(--dim);
+    }
+
+    #rateRow.slow #rateText {
+      color: var(--fg);
     }
 
     #coord {
@@ -155,7 +183,17 @@
           id="ctg">&mdash;</span> <span class="pos"
           id="pos"></span></div>
   <div id="hud-top-right">
-    <div id="rateText"></div>
+    <div id="rateRow">
+      <span id="rateThrottle" aria-hidden="true" title="throttled playback">
+        <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <ellipse cx="7.5" cy="10" rx="5.2" ry="3.4" stroke="currentColor" stroke-width="1.35"/>
+          <path d="M3.2 10.2c0-3.2 2-5.6 4.3-5.6s4.3 2.4 4.3 5.6" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
+          <circle cx="11.8" cy="8.1" r="1.15" stroke="currentColor" stroke-width="1.15"/>
+          <path d="M3.8 12.1v1.35M5.8 12.1v1.35M9.2 12.1v1.35M11.2 12.1v1.35" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <div id="rateText"></div>
+    </div>
     <div class="pct-reveal"><b id="pct">0.000%</b> revealed</div>
   </div>
   <div id="hud">
@@ -183,6 +221,7 @@
         pos: document.getElementById("pos"),
         pct: document.getElementById("pct"),
         rate: document.getElementById("rateText"),
+        rateRow: document.getElementById("rateRow"),
         hoverHint: document.getElementById("hoverHint"),
       };
 
@@ -200,6 +239,73 @@
         serverSkewMs: 0,
       };
       const BUF_CAP = 60000;
+
+      // Smoothed playback: EMA cadence from ticks, chase revealed edge at smooth rate.
+      const pace = {
+        displayT: 0,
+        emaRate: 0,
+        lastTickAt: 0,
+        lastTickIndex: 0,
+      };
+      const PACE_EMA = 0.18;
+      const PACE_NOMINAL_BLEND = 0.004;
+      const SLOW_PLAYBACK_RATE = 12;
+      let slowMode = false;
+
+      function playbackRate() {
+        if (slowMode) return SLOW_PLAYBACK_RATE;
+        return pace.emaRate > 0 ? pace.emaRate : M.rate;
+      }
+
+      function updateRateLabel() {
+        el.rate.textContent = formatRate(playbackRate());
+        el.rateRow.classList.toggle("slow", slowMode);
+      }
+
+      function resetPace(index, rate) {
+        pace.displayT = index;
+        pace.emaRate = rate;
+        pace.lastTickAt = performance.now();
+        pace.lastTickIndex = index;
+      }
+
+      function noteTick(index) {
+        const now = performance.now();
+        if (index > pace.lastTickIndex && pace.lastTickAt > 0) {
+          const dt = (now - pace.lastTickAt) / 1000;
+          if (dt > 0.02) {
+            const measured = (index - pace.lastTickIndex) / dt;
+            if (pace.emaRate <= 0) pace.emaRate = measured;
+            else pace.emaRate = pace.emaRate * (1 - PACE_EMA) + measured * PACE_EMA;
+          }
+        }
+        pace.lastTickAt = now;
+        pace.lastTickIndex = index;
+        if (M.rate > 0) {
+          pace.emaRate = pace.emaRate * (1 - PACE_NOMINAL_BLEND) + M.rate * PACE_NOMINAL_BLEND;
+        }
+      }
+
+      function advanceDisplay(dt) {
+        if (!M.n || M.maxRevealed <= 0) return;
+        const target = M.complete ? M.n : M.maxRevealed;
+        const rate = playbackRate();
+        if (rate <= 0) return;
+
+        if (pace.displayT < target) {
+          pace.displayT += (dt / 1000) * rate;
+          if (pace.displayT > target) pace.displayT = target;
+        } else if (pace.displayT > target) {
+          pace.displayT = target;
+        }
+
+        pace.displayT = Math.max(0, Math.min(pace.displayT, M.n));
+      }
+
+      function playheadIndex() {
+        if (M.maxRevealed <= 0) return 0;
+        return Math.max(0, Math.min(Math.floor(pace.displayT), M.n - 1, M.maxRevealed - 1));
+      }
 
       function appendBases(fromIndex, str) {
         if (!str) return;
@@ -249,14 +355,17 @@
             M.pileup = msg.pileup; M.contigs = msg.contigs || [];
             M.complete = false;
             resetBuffer(msg.tailStart, msg.tail, msg.index);
-            el.rate.textContent = formatRate(M.rate);
+            resetPace(msg.index, msg.rate);
+            updateRateLabel();
             el.hoverHint.textContent = M.pileup ? "hover the now-line for the pile-up" : "";
           } else if (msg.type === "tick") {
             appendBases(M.maxRevealed, msg.bases);
             M.maxRevealed = Math.max(M.maxRevealed, msg.index);
+            noteTick(msg.index);
           } else if (msg.type === "complete") {
             M.complete = true;
             M.maxRevealed = M.n;
+            noteTick(M.n);
           }
         };
         es.onerror = () => { };
@@ -317,21 +426,75 @@
       let wakeParticles = [];
       let driftT = 0;
       const WAKE_MAX = 700;
+      const BG_RGB = { r: 243, g: 239, b: 234 };
+      const GRAY_RGB = { r: 140, g: 126, b: 114 };
+      const PARTICLE_CAP = 180;
+      const GRAY_BUCKETS = 12;
+
+      function monoParticleRgb(gray) {
+        const t = Math.max(0, Math.min(1, gray));
+        return {
+          r: Math.round(BG_RGB.r + (GRAY_RGB.r - BG_RGB.r) * t),
+          g: Math.round(BG_RGB.g + (GRAY_RGB.g - BG_RGB.g) * t),
+          b: Math.round(BG_RGB.b + (GRAY_RGB.b - BG_RGB.b) * t),
+        };
+      }
+
+      function buildShapePaths() {
+        const paths = [];
+        const r = 1;
+        const tri = new Path2D();
+        for (let i = 0; i < 3; i++) {
+          const a = -Math.PI / 2 + i * 2 * Math.PI / 3;
+          const px = r * Math.cos(a);
+          const py = r * Math.sin(a);
+          if (i === 0) tri.moveTo(px, py);
+          else tri.lineTo(px, py);
+        }
+        tri.closePath();
+        paths.push(tri);
+        const sq = new Path2D();
+        sq.rect(-0.78, -0.78, 1.56, 1.56);
+        paths.push(sq);
+        for (const n of [5, 6, 12]) {
+          const poly = new Path2D();
+          for (let i = 0; i < n; i++) {
+            const a = -Math.PI / 2 + i * 2 * Math.PI / n;
+            const px = r * Math.cos(a);
+            const py = r * Math.sin(a);
+            if (i === 0) poly.moveTo(px, py);
+            else poly.lineTo(px, py);
+          }
+          poly.closePath();
+          paths.push(poly);
+        }
+        return paths;
+      }
+
+      const shapePaths = buildShapePaths();
 
       function initParticles() {
-        const n = Math.floor((W * H) / 14000);
+        const n = Math.min(PARTICLE_CAP, Math.floor((W * H) / 12000));
         particles = [];
         for (let i = 0; i < n; i++) {
+          const gray = Math.random();
+          const bucket = Math.min(GRAY_BUCKETS - 1, Math.floor(gray * GRAY_BUCKETS));
+          const { r, g, b } = monoParticleRgb((bucket + 0.5) / GRAY_BUCKETS);
           particles.push({
             x: Math.random() * W,
             y: Math.random() * H,
-            r: Math.random() * 2.2 + 1.0,
-            vx: (Math.random() - 0.5) * 0.08,
-            vy: -(Math.random() * 0.06 + 0.01),
+            r: Math.random() * 3.8 + 0.5,
+            shape: Math.floor(Math.random() * shapePaths.length),
+            rot: Math.random() * Math.PI * 2,
+            vx: (Math.random() - 0.5) * 0.1,
+            vy: -(Math.random() * 0.08 + 0.008),
             wobble: Math.random() * Math.PI * 2,
-            a: Math.random() * 0.145 + 0.712,
+            a: 0.14 + gray * 0.38,
+            lw: Math.random() * 1.4 + 0.5,
+            stroke: `rgb(${r},${g},${b})`,
           });
         }
+        particles.sort((a, b) => (a.stroke < b.stroke ? -1 : a.stroke > b.stroke ? 1 : 0));
         wakeParticles = [];
       }
 
@@ -369,6 +532,11 @@
       }
       window.addEventListener("resize", resize);
 
+      el.rateRow.addEventListener("click", () => {
+        slowMode = !slowMode;
+        updateRateLabel();
+      });
+
       canvas.addEventListener("mousemove", (e) => {
         hover.x = e.clientX; hover.y = e.clientY;
         const cursorX = W * CURSOR_FRAC;
@@ -397,8 +565,7 @@
       }
 
       function targetIndex() {
-        const local = (Date.now() / 1000 - M.startEpoch) * M.rate;
-        return Math.max(0, Math.min(local, M.maxRevealed, M.n));
+        return pace.displayT;
       }
 
       function helixY(k, midY) {
@@ -426,10 +593,19 @@
         return `rgba(${r},${g},${b},${a})`;
       }
 
-      function drawParticles(midY, dt) {
+      function clipLeftOfCursor(cursorX) {
+        ctx.beginPath();
+        ctx.rect(0, 0, cursorX, H);
+        ctx.clip();
+      }
+
+      function drawParticles(midY, dt, cursorX) {
         driftT += dt * 0.001;
         ctx.save();
-        ctx.lineWidth = 1.1;
+        clipLeftOfCursor(cursorX);
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        let lastStroke = "";
         for (const p of particles) {
           p.x += p.vx + Math.sin(driftT + p.wobble) * 0.04;
           p.y += p.vy + Math.cos(driftT * 0.7 + p.wobble) * 0.025;
@@ -438,11 +614,18 @@
           if (p.y < -8) p.y = H + 8;
           if (p.y > H + 8) p.y = -8;
           const nearHelix = 1 - Math.min(1, Math.abs(p.y - midY) / (HELIX_AMP + 40));
-          const a = p.a * (0.55 + nearHelix * 0.45);
-          ctx.strokeStyle = `rgba(140, 126, 114, ${a})`;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-          ctx.stroke();
+          ctx.globalAlpha = p.a * (0.5 + nearHelix * 0.5);
+          if (p.stroke !== lastStroke) {
+            ctx.strokeStyle = p.stroke;
+            lastStroke = p.stroke;
+          }
+          const rot = p.rot + Math.sin(driftT * 0.5 + p.wobble) * 0.08;
+          const sc = p.r * 2.6;
+          const c = Math.cos(rot) * sc * dpr;
+          const s = Math.sin(rot) * sc * dpr;
+          ctx.setTransform(c, s, -s, c, p.x * dpr, p.y * dpr);
+          ctx.lineWidth = p.lw;
+          ctx.stroke(shapePaths[p.shape]);
         }
         ctx.restore();
       }
@@ -478,15 +661,16 @@
         }
       }
 
-      function drawWake(dt) {
+      function drawWake(dt, cursorX) {
         ctx.save();
+        clipLeftOfCursor(cursorX);
         for (let i = wakeParticles.length - 1; i >= 0; i--) {
           const p = wakeParticles[i];
           p.x += p.vx;
           p.y += p.vy + Math.sin(driftT * 2.4 + p.wobble) * 0.015;
           p.vx *= 0.998;
           p.life -= p.decay * dt;
-          if (p.life <= 0 || p.x < -12 || p.y < -12 || p.y > H + 12) {
+          if (p.life <= 0 || p.x < -12 || p.x > cursorX + 0.5 || p.y < -12 || p.y > H + 12) {
             wakeParticles.splice(i, 1);
             continue;
           }
@@ -591,19 +775,15 @@
         ctx.lineTo(x, bot);
         ctx.stroke();
 
-        ctx.shadowColor = rgba(c1, 0.35);
-        ctx.shadowBlur = 10;
         ctx.fillStyle = rgba(c1, 0.72);
         ctx.beginPath();
         ctx.arc(x, top, BASE_DOT, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.shadowColor = rgba(c2, 0.35);
         ctx.fillStyle = rgba(c2, 0.72);
         ctx.beginPath();
         ctx.arc(x, bot, BASE_DOT, 0, Math.PI * 2);
         ctx.fill();
-        ctx.shadowBlur = 0;
 
         ctx.restore();
       }
@@ -619,11 +799,13 @@
         ctx.fillRect(0, 0, W, H);
         if (!M.n) return;
 
+        advanceDisplay(dt);
+
         const cursorX = W * CURSOR_FRAC;
         const midY = H / 2;
         const t = targetIndex();
 
-        drawParticles(midY, dt);
+        drawParticles(midY, dt, cursorX);
 
         const leftIdx = Math.floor(t - cursorX / CELL) - 1;
         const rightIdx = Math.ceil(t + (W - cursorX) / CELL) + 1;
@@ -634,18 +816,22 @@
         const ease = 1 - Math.exp(-dt * 0.014);
         animCursorHalf += (targetHalf - animCursorHalf) * ease;
 
+        ctx.save();
+        clipLeftOfCursor(cursorX);
+
         if (view === "helix") {
           emitWake(from, to, t, cursorX, midY, dt);
           drawBackbone(from, to, t, cursorX, midY);
-          drawWake(dt);
           for (let k = from; k < to; k++) {
             drawBasePair(k, M.bases[k - M.bufStart], t, cursorX, midY);
           }
         } else {
           emitCharParticles(from, to, t, cursorX, midY, dt);
           drawCharList(from, to, t, cursorX, midY);
-          drawWake(dt);
         }
+        ctx.restore();
+
+        drawWake(dt, cursorX);
 
         ctx.strokeStyle = M.complete ? "rgba(206, 147, 96, 0.85)" : "rgba(45, 40, 37, 0.55)";
         ctx.lineWidth = 2;
@@ -659,8 +845,8 @@
       }
 
       function drawHoverColumn(cursorX, midY, t) {
-        const absIndex = Math.floor(targetIndex());
-        if (hover.active) maybeFetchPileup(Math.max(0, Math.min(absIndex, M.maxRevealed - 1)));
+        const absIndex = playheadIndex();
+        if (hover.active) maybeFetchPileup(Math.max(0, absIndex));
         if (!hover.active || !hover.data || !hover.data.bases) return;
 
         const d = hover.data;
@@ -670,6 +856,7 @@
         const baseY = top - Math.round(HELIX_AMP * 0.48);
 
         ctx.save();
+        clipLeftOfCursor(cursorX);
         ctx.globalAlpha = 0.88;
         for (let i = 0; i < cols; i++) {
           const ch = d.bases[i];
@@ -688,7 +875,7 @@
       }
 
       function updateHud(t, cursorX, midY, half) {
-        const idx = Math.min(Math.floor(t), M.n - 1);
+        const idx = playheadIndex();
         const c = contigFor(idx);
         if (c) {
           el.ctg.textContent = lc(c.name);
