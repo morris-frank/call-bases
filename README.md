@@ -1,3 +1,5 @@
+#call-bases
+
 a genome, unfurling itself exactly once. base by base.
 
 at human scale:
