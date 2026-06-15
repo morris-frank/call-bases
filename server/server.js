@@ -17,7 +17,6 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const url = require("url");
 
 // ---------------------------------------------------------------------------
 // Config: defaults < config.json < environment.
@@ -33,6 +32,16 @@ function loadConfig() {
     tail: 4096, // bases sent to a fresh client for visual continuity
     tickMs: 250, // server reveal cadence
     pileup: null, // null = auto (enabled iff artifacts present)
+    attractions: true,
+    attractionSpecies: "homo_sapiens",
+    attractionAssembly: "GRCh38",
+    attractionWindowBases: 200000,
+    attractionDeadAirMs: 30000,
+    attractionMinIntervalMs: 12000,
+    attractionMaxIntervalMs: 45000,
+    attractionCacheSize: 96,
+    attractionHistorySize: 8,
+    attractionFetchTimeoutMs: 12000,
   };
   const cfgPath = process.env.CALLBASES_CONFIG || path.join(process.cwd(), "config.json");
   if (fs.existsSync(cfgPath)) {
@@ -48,6 +57,16 @@ function loadConfig() {
   if (env.CALLBASES_TAIL) cfg.tail = Number(env.CALLBASES_TAIL);
   if (env.CALLBASES_TICK_MS) cfg.tickMs = Number(env.CALLBASES_TICK_MS);
   if (env.CALLBASES_PILEUP) cfg.pileup = env.CALLBASES_PILEUP === "true";
+  if (env.CALLBASES_ATTRACTIONS) cfg.attractions = env.CALLBASES_ATTRACTIONS === "true";
+  if (env.CALLBASES_ATTRACTION_SPECIES) cfg.attractionSpecies = env.CALLBASES_ATTRACTION_SPECIES;
+  if (env.CALLBASES_ATTRACTION_ASSEMBLY) cfg.attractionAssembly = env.CALLBASES_ATTRACTION_ASSEMBLY;
+  if (env.CALLBASES_ATTRACTION_WINDOW_BASES) cfg.attractionWindowBases = Number(env.CALLBASES_ATTRACTION_WINDOW_BASES);
+  if (env.CALLBASES_ATTRACTION_DEAD_AIR_MS) cfg.attractionDeadAirMs = Number(env.CALLBASES_ATTRACTION_DEAD_AIR_MS);
+  if (env.CALLBASES_ATTRACTION_MIN_INTERVAL_MS) cfg.attractionMinIntervalMs = Number(env.CALLBASES_ATTRACTION_MIN_INTERVAL_MS);
+  if (env.CALLBASES_ATTRACTION_MAX_INTERVAL_MS) cfg.attractionMaxIntervalMs = Number(env.CALLBASES_ATTRACTION_MAX_INTERVAL_MS);
+  if (env.CALLBASES_ATTRACTION_CACHE_SIZE) cfg.attractionCacheSize = Number(env.CALLBASES_ATTRACTION_CACHE_SIZE);
+  if (env.CALLBASES_ATTRACTION_HISTORY_SIZE) cfg.attractionHistorySize = Number(env.CALLBASES_ATTRACTION_HISTORY_SIZE);
+  if (env.CALLBASES_ATTRACTION_FETCH_TIMEOUT_MS) cfg.attractionFetchTimeoutMs = Number(env.CALLBASES_ATTRACTION_FETCH_TIMEOUT_MS);
   return cfg;
 }
 
@@ -107,7 +126,48 @@ function openState(cfg) {
     rate,
     tail: cfg.tail,
     tickMs: cfg.tickMs,
+    clients: new Set(),
+    attractions: createAttractionState(cfg),
   };
+}
+
+function createAttractionState(cfg) {
+  const assembly = String(cfg.attractionAssembly || "GRCh38").toUpperCase();
+  const enabled = cfg.attractions !== false;
+  return {
+    enabled,
+    species: cfg.attractionSpecies,
+    assembly,
+    windowBases: clampInt(cfg.attractionWindowBases, 1000, 5000000, 200000),
+    deadAirMs: clampInt(cfg.attractionDeadAirMs, 0, 3600000, 30000),
+    minIntervalMs: clampInt(cfg.attractionMinIntervalMs, 1000, 3600000, 12000),
+    maxIntervalMs: clampInt(cfg.attractionMaxIntervalMs, 1000, 3600000, 45000),
+    cacheSize: clampInt(cfg.attractionCacheSize, 4, 1024, 96),
+    historySize: clampInt(cfg.attractionHistorySize, 1, 64, 8),
+    fetchTimeoutMs: clampInt(cfg.attractionFetchTimeoutMs, 1000, 120000, 12000),
+    serverBase: assembly === "GRCH37"
+      ? "https://grch37.rest.ensembl.org"
+      : "https://rest.ensembl.org",
+    webBase: assembly === "GRCH37"
+      ? "https://grch37.ensembl.org"
+      : "https://www.ensembl.org",
+    history: [],
+    cache: new Map(),
+    timer: null,
+    running: false,
+    nextEmitAt: 0,
+    lastWindowKey: null,
+    idleSince: 0,
+    inflight: null,
+  };
+}
+
+function clampInt(v, min, max, fallback) {
+  if (!Number.isFinite(v)) return fallback;
+  const n = Math.floor(v);
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
 }
 
 function currentIndex(st, nowMs) {
@@ -149,6 +209,430 @@ function contigFor(st, pos) {
   return { name: ctg.name, coord: pos - ctg.start + 1 };
 }
 
+function normalizeContigName(name) {
+  let v = String(name || "").trim();
+  v = v.replace(/^chr/i, "");
+  if (v === "M") return "MT";
+  return v;
+}
+
+function attractionWindowFor(st, pos) {
+  const c = contigFor(st, pos);
+  if (!c) return null;
+  const ctg = st.meta.contigs.find((x) => x.name === c.name);
+  if (!ctg) return null;
+  const seq = normalizeContigName(c.name);
+  const win = st.attractions.windowBases;
+  const bucket = Math.floor((c.coord - 1) / win);
+  const start = bucket * win + 1;
+  const end = Math.min(ctg.length, start + win - 1);
+  return {
+    key: `${seq}:${start}-${end}:${st.attractions.assembly}`,
+    contig: c.name,
+    seqRegion: seq,
+    start,
+    end,
+  };
+}
+
+function jitterMs(st) {
+  const a = st.attractions.minIntervalMs;
+  const b = Math.max(a, st.attractions.maxIntervalMs);
+  return a + Math.floor(Math.random() * (b - a + 1));
+}
+
+function broadcast(st, obj) {
+  for (const res of st.clients) {
+    try {
+      sseWrite(res, obj);
+    } catch (_) {
+      // close handlers prune dead connections.
+    }
+  }
+}
+
+function pruneCache(st) {
+  const tv = st.attractions;
+  while (tv.cache.size > tv.cacheSize) {
+    const oldest = tv.cache.keys().next();
+    if (oldest.done) break;
+    tv.cache.delete(oldest.value);
+  }
+}
+
+function pushAttractionHistory(st, attraction) {
+  const tv = st.attractions;
+  tv.history.push(attraction);
+  if (tv.history.length > tv.historySize) {
+    tv.history.splice(0, tv.history.length - tv.historySize);
+  }
+}
+
+function upsertCacheEntry(st, key, patch) {
+  const tv = st.attractions;
+  const cur = tv.cache.get(key) || { key, attractions: [], cursor: 0, announced: false };
+  const next = Object.assign(cur, patch);
+  if (tv.cache.has(key)) tv.cache.delete(key);
+  tv.cache.set(key, next);
+  pruneCache(st);
+  return next;
+}
+
+function attractionSourceScore(source, clinical) {
+  const s = String(source || "").toLowerCase();
+  const c = String(clinical || "").toLowerCase();
+  if (s.includes("clinvar")) {
+    if (c.includes("pathogenic")) return 110;
+    if (c.includes("likely pathogenic")) return 104;
+    return 96;
+  }
+  if (s.includes("gwas")) return 100;
+  if (s.includes("omim")) return 100;
+  if (s.includes("cancer gene census")) return 99;
+  if (s.includes("cosmic")) return 94;
+  if (s.includes("g2p")) return 92;
+  if (s.includes("hgmd")) return 90;
+  return 80;
+}
+
+function shortGeneName(gene) {
+  return gene.external_name || gene.gene_id || gene.id || "an unnamed gene";
+}
+
+function titleCaseLoose(s) {
+  return String(s || "").replace(/\b([a-z])/g, (m, ch) => ch.toUpperCase());
+}
+
+function prettifyGeneDescription(description) {
+  const raw = String(description || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(.*?)\s*\[Source:(.*)\]$/i);
+  if (!match) return raw;
+  const label = match[1].trim();
+  const meta = match[2]
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const idx = part.indexOf(":");
+      if (idx === -1) return titleCaseLoose(part);
+      const key = titleCaseLoose(part.slice(0, idx).trim());
+      const value = part.slice(idx + 1).trim();
+      return `${key}: ${value}`;
+    })
+    .join("; ");
+  return meta ? `${label} (${meta})` : label;
+}
+
+function compact(s, max) {
+  const v = String(s || "").replace(/\s+/g, " ").trim();
+  if (v.length <= max) return v;
+  return `${v.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
+}
+
+function countBy(list, keyFn) {
+  const out = new Map();
+  for (const item of list) {
+    const key = keyFn(item);
+    out.set(key, (out.get(key) || 0) + 1);
+  }
+  return out;
+}
+
+function topPhenotypeAttraction(region, records, kind) {
+  const flattened = [];
+  for (const rec of records) {
+    for (const assoc of rec.phenotype_associations || []) {
+      flattened.push({
+        id: rec.id,
+        description: assoc.description,
+        source: assoc.source,
+        clinical: assoc.attributes && assoc.attributes.clinical_significance,
+        gene: (assoc.attributes && assoc.attributes.associated_gene) || null,
+      });
+    }
+  }
+  if (!flattened.length) return null;
+  flattened.sort((a, b) => attractionSourceScore(b.source, b.clinical) - attractionSourceScore(a.source, a.clinical));
+  const top = flattened[0];
+  const clinical = top.clinical ? ` (${top.clinical})` : "";
+  const label = kind === "variant" ? top.id : (top.gene || top.id);
+  return {
+    id: `${region.key}:${kind}:${top.id}:${top.description}`,
+    windowKey: region.key,
+    category: kind === "variant" ? "disease" : "trait",
+    score: attractionSourceScore(top.source, top.clinical),
+    title: `${top.source}: ${label}`,
+    detail: compact(`${top.description}${clinical}`, 150),
+    source: `Ensembl ${top.source}`,
+    region: {
+      contig: region.contig,
+      start: region.start,
+      end: region.end,
+    },
+  };
+}
+
+function buildRegionUrl(st, region) {
+  const seqRegion = region.seqRegion || normalizeContigName(region.contig);
+  return `${st.attractions.webBase}/Homo_sapiens/Location/View?r=${encodeURIComponent(
+    `${seqRegion}:${region.start}-${region.end}`
+  )}`;
+}
+
+function decorateAttraction(st, attraction) {
+  return Object.assign(attraction, {
+    url: buildRegionUrl(st, attraction.region),
+  });
+}
+
+function buildAttractions(st, region, genes, regulatory, genePhenotypes, variantPhenotypes) {
+  const out = [];
+  const overlappingGenes = genes.filter((g) => g.start <= region.end && g.end >= region.start);
+  if (overlappingGenes.length) {
+    const ranked = overlappingGenes
+      .slice()
+      .sort((a, b) => {
+        const pa = a.biotype === "protein_coding" ? 1 : 0;
+        const pb = b.biotype === "protein_coding" ? 1 : 0;
+        if (pb !== pa) return pb - pa;
+        return (b.end - b.start) - (a.end - a.start);
+      });
+    const top = ranked[0];
+    out.push({
+      id: `${region.key}:gene:${top.id}`,
+      windowKey: region.key,
+      category: "gene",
+      score: top.biotype === "protein_coding" ? 92 : 80,
+      title: `inside ${shortGeneName(top)}`,
+      detail: compact(
+        prettifyGeneDescription(top.description) || `${shortGeneName(top)} overlaps this part of ${region.contig}.`,
+        150
+      ),
+      source: "Ensembl gene model",
+      region: { contig: region.contig, start: region.start, end: region.end },
+    });
+  } else if (genes.length) {
+    const center = Math.floor((region.start + region.end) / 2);
+    const nearest = genes
+      .slice()
+      .sort((a, b) => {
+        const da = Math.min(Math.abs(a.start - center), Math.abs(a.end - center));
+        const db = Math.min(Math.abs(b.start - center), Math.abs(b.end - center));
+        return da - db;
+      })[0];
+    out.push({
+      id: `${region.key}:near:${nearest.id}`,
+      windowKey: region.key,
+      category: "gene",
+      score: nearest.biotype === "protein_coding" ? 74 : 64,
+      title: `nearest gene: ${shortGeneName(nearest)}`,
+      detail: compact(
+        prettifyGeneDescription(nearest.description) || `${shortGeneName(nearest)} is the nearest annotated gene here.`,
+        150
+      ),
+      source: "Ensembl gene model",
+      region: { contig: region.contig, start: region.start, end: region.end },
+    });
+  }
+
+  const genePhenotype = topPhenotypeAttraction(region, genePhenotypes, "gene");
+  if (genePhenotype) out.push(genePhenotype);
+
+  const variantPhenotype = topPhenotypeAttraction(region, variantPhenotypes, "variant");
+  if (variantPhenotype) out.push(variantPhenotype);
+
+  if (regulatory.length) {
+    const counts = countBy(regulatory, (r) => r.description || "regulatory feature");
+    const summary = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2)
+      .map(([label, n]) => `${n} ${label}${n === 1 ? "" : "s"}`)
+      .join(", ");
+    out.push({
+      id: `${region.key}:reg:${summary}`,
+      windowKey: region.key,
+      category: "regulation",
+      score: 70,
+      title: "regulatory scenery",
+      detail: compact(`${summary} overlap this window.`, 150),
+      source: "Ensembl regulation",
+      region: { contig: region.contig, start: region.start, end: region.end },
+    });
+  }
+
+  if (!out.length) {
+    out.push({
+      id: `${region.key}:quiet`,
+      windowKey: region.key,
+      category: "quiet",
+      score: 10,
+      title: "quiet stretch",
+      detail: `No standout gene, disease, or regulatory landmark was found in ${region.contig}:${region.start.toLocaleString("en-US")}-${region.end.toLocaleString("en-US")}.`,
+      source: "Ensembl region summary",
+      region: { contig: region.contig, start: region.start, end: region.end },
+    });
+  }
+
+  const seen = new Set();
+  return out
+    .sort((a, b) => b.score - a.score)
+    .filter((item) => {
+      const k = `${item.title}|${item.detail}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .map((item) => decorateAttraction(st, item));
+}
+
+async function fetchJsonWithTimeout(st, pathname, query, signal) {
+  const endpoint = new URL(pathname, st.attractions.serverBase);
+  for (const [key, value] of query) endpoint.searchParams.append(key, value);
+  endpoint.searchParams.append("content-type", "application/json");
+  const res = await fetch(endpoint, {
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`ensembl ${res.status} for ${endpoint.pathname}`);
+  }
+  return res.json();
+}
+
+async function fetchAttractionsForWindow(st, region) {
+  const tv = st.attractions;
+  const queryRegion = `${region.seqRegion}:${region.start}-${region.end}`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), tv.fetchTimeoutMs);
+  tv.inflight = { key: region.key, controller: ac };
+  upsertCacheEntry(st, region.key, { status: "fetching", region, fetchedAt: Date.now() });
+  try {
+    const overlapSpecies = tv.species === "homo_sapiens" ? "human" : tv.species;
+    const [overlap, genePhenotypes, variantPhenotypes] = await Promise.all([
+      fetchJsonWithTimeout(
+        st,
+        `/overlap/region/${overlapSpecies}/${queryRegion}`,
+        [["feature", "gene"], ["feature", "regulatory"]],
+        ac.signal
+      ),
+      fetchJsonWithTimeout(
+        st,
+        `/phenotype/region/${tv.species}/${queryRegion}`,
+        [["feature_type", "Gene"]],
+        ac.signal
+      ),
+      fetchJsonWithTimeout(
+        st,
+        `/phenotype/region/${tv.species}/${queryRegion}`,
+        [["feature_type", "Variation"]],
+        ac.signal
+      ),
+    ]);
+
+    const genes = overlap.filter((item) => item.feature_type === "gene");
+    const regulatory = overlap.filter((item) => item.feature_type === "regulatory");
+    const attractions = buildAttractions(st, region, genes, regulatory, genePhenotypes, variantPhenotypes);
+    upsertCacheEntry(st, region.key, {
+      status: "ready",
+      region,
+      attractions,
+      cursor: 0,
+      announced: false,
+      fetchedAt: Date.now(),
+    });
+  } catch (err) {
+    if (err && err.name !== "AbortError") {
+      console.error(`attractions fetch failed for ${region.key}: ${err.message}`);
+    }
+    upsertCacheEntry(st, region.key, {
+      status: "error",
+      region,
+      errorAt: Date.now(),
+      attractions: [],
+      cursor: 0,
+      announced: false,
+    });
+  } finally {
+    clearTimeout(timer);
+    if (tv.inflight && tv.inflight.key === region.key) {
+      tv.inflight = null;
+    }
+  }
+}
+
+function startAttractionLoop(st) {
+  const tv = st.attractions;
+  if (!tv.enabled) return;
+  tv.idleSince = 0;
+  if (!tv.nextEmitAt) tv.nextEmitAt = Date.now() + jitterMs(st);
+  if (tv.timer) return;
+  tv.timer = setInterval(() => {
+    void runAttractionLoop(st);
+  }, 1000);
+}
+
+function stopAttractionLoop(st) {
+  const tv = st.attractions;
+  if (tv.timer) {
+    clearInterval(tv.timer);
+    tv.timer = null;
+  }
+  if (tv.inflight) {
+    tv.inflight.controller.abort();
+    tv.inflight = null;
+  }
+  tv.running = false;
+  tv.idleSince = 0;
+  tv.nextEmitAt = 0;
+  tv.lastWindowKey = null;
+}
+
+async function runAttractionLoop(st) {
+  const tv = st.attractions;
+  if (!tv.enabled || tv.running) return;
+  tv.running = true;
+  try {
+    if (st.clients.size === 0) {
+      if (!tv.idleSince) tv.idleSince = Date.now();
+      if (Date.now() - tv.idleSince >= tv.deadAirMs) stopAttractionLoop(st);
+      return;
+    }
+
+    tv.idleSince = 0;
+    const region = attractionWindowFor(st, Math.max(0, currentIndex(st, Date.now()) - 1));
+    if (!region) return;
+    let entry = tv.cache.get(region.key);
+
+    if (!entry || (entry.status === "error" && Date.now() - (entry.errorAt || 0) > 60000)) {
+      await fetchAttractionsForWindow(st, region);
+      entry = tv.cache.get(region.key);
+    }
+
+    if (!entry || entry.status !== "ready" || !entry.attractions.length) return;
+
+    const changedWindow = tv.lastWindowKey !== region.key;
+    if (changedWindow || Date.now() >= tv.nextEmitAt) {
+      const idx = entry.cursor % entry.attractions.length;
+      const emittedAt = Date.now();
+      const durationMs = jitterMs(st);
+      const attraction = Object.assign({}, entry.attractions[idx], {
+        emittedAt,
+        durationMs,
+        expiresAt: emittedAt + durationMs,
+      });
+      entry.cursor = (idx + 1) % entry.attractions.length;
+      entry.announced = true;
+      tv.lastWindowKey = region.key;
+      tv.nextEmitAt = attraction.expiresAt;
+      pushAttractionHistory(st, attraction);
+      broadcast(st, { type: "attraction", attraction });
+    }
+  } finally {
+    tv.running = false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // HTTP handlers.
 // ---------------------------------------------------------------------------
@@ -176,7 +660,12 @@ function handleStream(st, req, res) {
     contigs: st.meta.contigs,
     tail: readBases(st.consensusFd, tailStart, last),
     tailStart,
+    attractionsEnabled: st.attractions.enabled,
+    attractions: st.attractions.history,
   });
+
+  st.clients.add(res);
+  startAttractionLoop(st);
 
   let completeSent = false;
   const timer = setInterval(() => {
@@ -191,7 +680,10 @@ function handleStream(st, req, res) {
     }
   }, st.tickMs);
 
-  const stop = () => clearInterval(timer);
+  const stop = () => {
+    clearInterval(timer);
+    st.clients.delete(res);
+  };
   req.on("close", stop);
   res.on("close", stop);
 }
@@ -236,18 +728,18 @@ function main() {
   console.log(
     `call-bases: N=${st.N} rate=${st.rate.toFixed(3)} b/s start=${new Date(
       st.startEpoch * 1000
-    ).toISOString()} pileup=${st.pileupEnabled}`
+    ).toISOString()} pileup=${st.pileupEnabled} attractions=${st.attractions.enabled ? "on" : "off"}`
   );
 
   const server = http.createServer((req, res) => {
-    const parsed = url.parse(req.url, true);
+    const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     if (req.method !== "GET") {
       res.writeHead(405);
       res.end();
       return;
     }
     if (parsed.pathname === "/stream") return handleStream(st, req, res);
-    if (parsed.pathname === "/pileup") return handlePileup(st, parsed.query, res);
+    if (parsed.pathname === "/pileup") return handlePileup(st, Object.fromEntries(parsed.searchParams), res);
     if (parsed.pathname === "/" || parsed.pathname === "/index.html") return serveStatic(st, res);
     res.writeHead(404, { "Content-Type": "text/plain" });
     res.end("not found");

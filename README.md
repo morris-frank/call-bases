@@ -41,6 +41,21 @@ CALLBASES_RUNTIME_SECONDS=31536000 node server/server.js
 
 Open <http://localhost:8080>.
 
+`touristic attractions` are enabled by default and are fetched only on the
+backend from Ensembl region endpoints, then broadcast as summary messages over
+the existing SSE stream. They are window-cached server-side and the attraction
+worker quiets down after `attractionDeadAirMs` of having no connected listeners.
+
+If your reference assembly is not GRCh38, set it explicitly in `config.json`
+or via env:
+
+```bash
+CALLBASES_ATTRACTION_ASSEMBLY=GRCh37
+CALLBASES_ATTRACTION_DEAD_AIR_MS=30000
+CALLBASES_ATTRACTION_WINDOW_BASES=200000
+node server/server.js
+```
+
 ## deploy
 
 one small vps, sized for the artifact disk (~5 gb consensus-only, ~60-80 gb with

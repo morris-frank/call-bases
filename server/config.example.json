@@ -7,5 +7,12 @@
   "runtimeSeconds": 31536000,
   "tail": 4096,
   "tickMs": 250,
-  "pileup": null
+  "pileup": null,
+  "attractions": true,
+  "attractionSpecies": "homo_sapiens",
+  "attractionAssembly": "GRCh38",
+  "attractionWindowBases": 200000,
+  "attractionDeadAirMs": 30000,
+  "attractionMinIntervalMs": 12000,
+  "attractionMaxIntervalMs": 45000
 }
