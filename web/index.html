@@ -169,6 +169,28 @@
       font-size: 11px;
       letter-spacing: .12em;
     }
+
+    @media (max-width: 640px) {
+      #hud-top-right {
+        top: 14px;
+        right: 3px;
+      }
+
+      #title {
+        left: 14px;
+      }
+
+      #repo {
+        left: 14px;
+      }
+
+      #coord {
+        text-align: right;
+        transform: none;
+        left: auto;
+        right: 3px;
+      }
+    }
   </style>
 </head>
 
@@ -346,8 +368,19 @@
       }
 
       // --- SSE ---------------------------------------------------------------
+      let es = null;
+      let reconnectTimer = null;
+
       function connect() {
-        const es = new EventSource("/stream");
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (es) {
+          es.close();
+          es = null;
+        }
+        es = new EventSource("/stream");
         es.onmessage = (ev) => {
           const msg = JSON.parse(ev.data);
           if (msg.type === "hello") {
@@ -368,8 +401,23 @@
             noteTick(M.n);
           }
         };
-        es.onerror = () => { };
+        es.onerror = () => {
+          if (es) {
+            es.close();
+            es = null;
+          }
+          if (!reconnectTimer) {
+            reconnectTimer = setTimeout(() => {
+              reconnectTimer = null;
+              connect();
+            }, 800);
+          }
+        };
       }
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") connect();
+      });
 
       function formatRate(r) {
         if (r >= 1000) return (r / 1000).toFixed(2) + " kb/s";
@@ -418,6 +466,8 @@
       let animCursorHalf = 50;
       let BASE_DOT = 3.2;
       let BAR_WIDTH = 2.2;
+      let BACKBONE_WIDTH = 8;
+      const MIN_ALPHA = 0.95;
       let FONT = '400 11px "Andale Mono", "Andale Mono WT", monospace';
       let CHAR_FONT = '400 33px "Andale Mono", "Andale Mono WT", monospace';
       let PHASE = (Math.PI * 2) / HELIX_PERIOD;
@@ -443,20 +493,7 @@
       function buildShapePaths() {
         const paths = [];
         const r = 1;
-        const tri = new Path2D();
-        for (let i = 0; i < 3; i++) {
-          const a = -Math.PI / 2 + i * 2 * Math.PI / 3;
-          const px = r * Math.cos(a);
-          const py = r * Math.sin(a);
-          if (i === 0) tri.moveTo(px, py);
-          else tri.lineTo(px, py);
-        }
-        tri.closePath();
-        paths.push(tri);
-        const sq = new Path2D();
-        sq.rect(-0.78, -0.78, 1.56, 1.56);
-        paths.push(sq);
-        for (const n of [5, 6, 12]) {
+        for (const n of [3, 5, 7, 9]) {
           const poly = new Path2D();
           for (let i = 0; i < n; i++) {
             const a = -Math.PI / 2 + i * 2 * Math.PI / n;
@@ -489,8 +526,8 @@
             vx: (Math.random() - 0.5) * 0.1,
             vy: -(Math.random() * 0.08 + 0.008),
             wobble: Math.random() * Math.PI * 2,
-            a: 0.07 + gray * 0.16,
-            aFill: 0.015 + gray * 0.045,
+            a: MIN_ALPHA + gray * (1 - MIN_ALPHA),
+            aFill: MIN_ALPHA + gray * (1 - MIN_ALPHA) * 0.85,
             lw: Math.random() * 1.8 + 0.35,
             stroke: `rgb(${r},${g},${b})`,
           });
@@ -519,6 +556,7 @@
         HELIX_AMP = amp;
         BASE_DOT = Math.max(4.8, HELIX_AMP * 0.1);
         BAR_WIDTH = Math.max(3, HELIX_AMP * 0.052);
+        BACKBONE_WIDTH = Math.max(BASE_DOT * 2.6, HELIX_AMP * 0.22);
         const fontPx = Math.round(Math.max(11, HELIX_AMP * 0.21));
         const labelPx = Math.round(Math.max(10, HELIX_AMP * 0.19));
         const charPx = labelPx * 3;
@@ -576,8 +614,8 @@
 
       function fadeAlpha(cursorX, x) {
         const dist = cursorX - x;
-        const a = dist < CELL * 1.5 ? 0.3 + 0.7 * (dist / (CELL * 1.5)) : 1;
-        return Math.max(0.2, Math.min(1, a));
+        const a = dist < CELL * 1.5 ? MIN_ALPHA + (1 - MIN_ALPHA) * (dist / (CELL * 1.5)) : 1;
+        return Math.max(MIN_ALPHA, Math.min(1, a));
       }
 
       function hexToRgb(hex) {
@@ -614,7 +652,7 @@
           if (p.y < -8) p.y = H + 8;
           if (p.y > H + 8) p.y = -8;
           const nearHelix = 1 - Math.min(1, Math.abs(p.y - midY) / (HELIX_AMP + 40));
-          const helixA = 0.45 + nearHelix * 0.55;
+          const helixA = MIN_ALPHA + nearHelix * (1 - MIN_ALPHA);
           if (p.stroke !== lastStroke) {
             ctx.strokeStyle = p.stroke;
             ctx.fillStyle = p.stroke;
@@ -703,7 +741,7 @@
             continue;
           }
           const fade = p.life / (p.life0 || 1);
-          ctx.globalAlpha = fade * 0.28;
+          ctx.globalAlpha = MIN_ALPHA + fade * (1 - MIN_ALPHA);
           ctx.fillStyle = p.color;
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
@@ -762,8 +800,8 @@
             else ctx.lineTo(x, y);
           }
           if (!started) return;
-          ctx.strokeStyle = "rgba(45, 40, 37, 0.11)";
-          ctx.lineWidth = Math.max(1.6, HELIX_AMP * 0.028);
+          ctx.strokeStyle = "rgba(45, 40, 37, 0.95)";
+          ctx.lineWidth = BACKBONE_WIDTH;
           ctx.lineJoin = "round";
           ctx.stroke();
         };
@@ -783,10 +821,10 @@
         ctx.globalAlpha = alpha;
 
         const grad = ctx.createLinearGradient(x, top, x, bot);
-        grad.addColorStop(0, rgba(c1, 0.55));
-        grad.addColorStop(0.5, rgba(c1, 0.18));
-        grad.addColorStop(0.5, rgba(c2, 0.18));
-        grad.addColorStop(1, rgba(c2, 0.55));
+        grad.addColorStop(0, rgba(c1, MIN_ALPHA));
+        grad.addColorStop(0.5, rgba(c1, MIN_ALPHA));
+        grad.addColorStop(0.5, rgba(c2, MIN_ALPHA));
+        grad.addColorStop(1, rgba(c2, MIN_ALPHA));
         ctx.strokeStyle = grad;
         ctx.lineWidth = BAR_WIDTH;
         ctx.lineCap = "round";
@@ -852,7 +890,7 @@
 
         drawWake(dt, cursorX);
 
-        ctx.strokeStyle = M.complete ? "rgba(206, 147, 96, 0.85)" : "rgba(45, 40, 37, 0.55)";
+        ctx.strokeStyle = M.complete ? "rgba(206, 147, 96, 0.95)" : "rgba(45, 40, 37, 0.95)";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(cursorX, midY - animCursorHalf);
@@ -876,7 +914,7 @@
 
         ctx.save();
         clipLeftOfCursor(cursorX);
-        ctx.globalAlpha = 0.88;
+        ctx.globalAlpha = MIN_ALPHA;
         for (let i = 0; i < cols; i++) {
           const ch = d.bases[i];
           const y = baseY - i * step;
@@ -893,6 +931,8 @@
         ctx.fillText(`ref ${lc(d.ref)}  depth ${d.depth}`, cursorX, baseY - cols * step - 8);
       }
 
+      const narrowMq = window.matchMedia("(max-width: 640px)");
+
       function updateHud(t, cursorX, midY, half) {
         const idx = playheadIndex();
         const c = contigFor(idx);
@@ -900,7 +940,13 @@
           el.ctg.textContent = lc(c.name);
           el.pos.textContent = c.coord.toLocaleString("en-US");
         }
-        el.coord.style.left = cursorX + "px";
+        if (narrowMq.matches) {
+          el.coord.style.left = "";
+          el.coord.style.right = "3px";
+        } else {
+          el.coord.style.right = "";
+          el.coord.style.left = cursorX + "px";
+        }
         el.coord.style.top = (midY + half + 22) + "px";
         el.pct.textContent = (t / M.n * 100).toFixed(3) + "%";
       }
