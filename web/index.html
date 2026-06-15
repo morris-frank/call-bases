@@ -632,6 +632,25 @@
         return `rgba(${r},${g},${b},${a})`;
       }
 
+      function wakeHighlightColor(hex) {
+        const { r, g, b } = hexToRgb(hex);
+        const roll = Math.random();
+        let mix;
+        if (roll < 0.2) {
+          mix = 0.86 + Math.random() * 0.14;
+        } else if (roll < 0.58) {
+          mix = 0.55 + Math.random() * 0.36;
+        } else {
+          mix = 0.34 + Math.random() * 0.3;
+        }
+        const jitter = () => (Math.random() - 0.5) * (16 + Math.random() * 56);
+        const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+        const nr = clamp(r + (255 - r) * mix + jitter());
+        const ng = clamp(g + (255 - g) * mix + jitter());
+        const nb = clamp(b + (255 - b) * mix + jitter());
+        return `rgb(${nr},${ng},${nb})`;
+      }
+
       function clipLeftOfCursor(cursorX) {
         ctx.beginPath();
         ctx.rect(0, 0, cursorX, H);
@@ -687,7 +706,7 @@
           y,
           vx: -stream * (0.9 + Math.random() * 0.2),
           vy: sign * (Math.random() * outVy + outVy * 0.4),
-          r: Math.random() * 2.8 + 1.1,
+          r: Math.random() * 3.6 + 0.45,
           life,
           life0: life,
           decay: Math.random() * 0.00015 + 0.00008,
@@ -709,8 +728,8 @@
           const ch = bi >= 0 && bi < M.bases.length ? M.bases[bi] : null;
           const { top, bot } = helixY(k, midY);
           const strands = [
-            { y: top, color: ch ? baseColor(ch) : N_COLOR },
-            { y: bot, color: ch ? baseColor(complement(ch)) : N_COLOR },
+            { y: top, color: ch ? wakeHighlightColor(baseColor(ch)) : wakeHighlightColor(N_COLOR) },
+            { y: bot, color: ch ? wakeHighlightColor(baseColor(complement(ch))) : wakeHighlightColor(N_COLOR) },
           ];
           for (const s of strands) {
             spawnWakeParticle(
@@ -763,7 +782,7 @@
           spawnWakeParticle(
             x + (Math.random() - 0.5) * 4,
             midY + (Math.random() - 0.5) * 3,
-            baseColor(ch),
+            wakeHighlightColor(baseColor(ch)),
             midY,
           );
         }
