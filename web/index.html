@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>call-bases</title>
+<style>
+  :root {
+    --bg: #07080a;
+    --fg: #e6e7ea;
+    --dim: #6b7077;
+    --A: #4cc38a; /* green  */
+    --C: #4aa3ff; /* blue   */
+    --G: #f2c14e; /* amber  */
+    --T: #f2545b; /* red    */
+    --N: #4b5159; /* grey   */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #hud { position: fixed; left: 0; right: 0; bottom: 0; padding: 18px 22px;
+    display: flex; justify-content: space-between; align-items: flex-end;
+    pointer-events: none; font-size: 13px; letter-spacing: .04em; }
+  #coord { font-size: 22px; letter-spacing: .02em; }
+  #coord .pos { color: var(--fg); }
+  #coord .ctg { color: var(--dim); }
+  #right { text-align: right; color: var(--dim); line-height: 1.5; }
+  #right b { color: var(--fg); font-weight: 600; }
+  #title { position: fixed; top: 18px; left: 22px; color: var(--dim);
+    font-size: 12px; letter-spacing: .35em; text-transform: uppercase; pointer-events: none; }
+  #status { position: fixed; top: 18px; right: 22px; color: var(--dim); font-size: 12px;
+    letter-spacing: .15em; text-transform: uppercase; pointer-events: none; }
+  #status.live b { color: var(--A); }
+  #status.done b { color: var(--G); }
+  .hint { color: var(--dim); font-size: 11px; letter-spacing: .12em; }
+</style>
+</head>
+<body>
+  <div id="stage"><canvas id="c"></canvas></div>
+  <div id="title">call&middot;bases</div>
+  <div id="status"><b id="statusText">connecting</b></div>
+  <div id="hud">
+    <div id="coord"><span class="ctg" id="ctg">&mdash;</span> <span class="pos" id="pos"></span></div>
+    <div id="right">
+      <div><b id="pct">0.000%</b> revealed</div>
+      <div id="rateText"></div>
+      <div class="hint" id="hoverHint"></div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  "use strict";
+
+  const COLORS = { A: "#4cc38a", C: "#4aa3ff", G: "#f2c14e", T: "#f2545b" };
+  const baseColor = (ch) => COLORS[ch] || "#4b5159";
+
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const el = {
+    statusBox: document.getElementById("status"),
+    status: document.getElementById("statusText"),
+    ctg: document.getElementById("ctg"),
+    pos: document.getElementById("pos"),
+    pct: document.getElementById("pct"),
+    rate: document.getElementById("rateText"),
+    hoverHint: document.getElementById("hoverHint"),
+  };
+
+  // --- model -------------------------------------------------------------
+  const M = {
+    n: 0,
+    rate: 0,
+    startEpoch: 0,
+    pileup: false,
+    contigs: [],
+    // rolling buffer of revealed bases: bases[k - bufStart] is absolute index k
+    bufStart: 0,
+    bases: "",
+    maxRevealed: 0,
+    complete: false,
+    serverSkewMs: 0, // (serverIndexTime - localTime) implied offset, kept ~0
+  };
+  const BUF_CAP = 60000; // plenty for the visible window + a little history
+
+  function appendBases(fromIndex, str) {
+    if (!str) return;
+    if (M.bases.length === 0) {
+      M.bufStart = fromIndex;
+      M.bases = str;
+    } else {
+      M.bases += str;
+    }
+    M.maxRevealed = M.bufStart + M.bases.length;
+    if (M.bases.length > BUF_CAP) {
+      const drop = M.bases.length - BUF_CAP;
+      M.bases = M.bases.slice(drop);
+      M.bufStart += drop;
+    }
+  }
+
+  function resetBuffer(tailStart, tail, index) {
+    M.bufStart = tailStart;
+    M.bases = tail || "";
+    M.maxRevealed = Math.max(index, M.bufStart + M.bases.length);
+    if (M.bases.length < (index - M.bufStart)) {
+      // tail shorter than the gap (shouldn't happen) -> snap to index
+      M.bufStart = index;
+      M.bases = "";
+      M.maxRevealed = index;
+    }
+  }
+
+  function contigFor(pos) {
+    const c = M.contigs;
+    if (!c.length) return null;
+    let lo = 0, hi = c.length - 1, ans = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (c[mid].start <= pos) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return { name: c[ans].name, coord: pos - c[ans].start + 1 };
+  }
+
+  // --- SSE ---------------------------------------------------------------
+  function connect() {
+    const es = new EventSource("/stream");
+    es.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "hello") {
+        M.n = msg.n; M.rate = msg.rate; M.startEpoch = msg.startEpoch;
+        M.pileup = msg.pileup; M.contigs = msg.contigs || [];
+        M.complete = false;
+        resetBuffer(msg.tailStart, msg.tail, msg.index);
+        setStatus(msg.index >= M.n ? "done" : "live");
+        el.rate.textContent = formatRate(M.rate);
+        el.hoverHint.textContent = M.pileup ? "hover the now-line for the pile-up" : "";
+      } else if (msg.type === "tick") {
+        // bases cover [prevMaxRevealed, msg.index)
+        appendBases(M.maxRevealed, msg.bases);
+        M.maxRevealed = Math.max(M.maxRevealed, msg.index);
+      } else if (msg.type === "complete") {
+        M.complete = true;
+        M.maxRevealed = M.n;
+        setStatus("done");
+      }
+    };
+    es.onerror = () => setStatus("reconnecting");
+    es.onopen = () => { if (!M.complete) setStatus("live"); };
+  }
+
+  function setStatus(s) {
+    el.statusBox.className = (s === "live") ? "live" : (s === "done" ? "done" : "");
+    el.status.textContent = s === "done" ? "complete" : s;
+  }
+  function formatRate(r) {
+    if (r >= 1000) return (r / 1000).toFixed(2) + " kb/s";
+    if (r >= 1) return r.toFixed(1) + " b/s";
+    return r.toFixed(3) + " b/s";
+  }
+
+  // --- hover pile-up -----------------------------------------------------
+  const hover = { active: false, x: 0, y: 0, data: null, lastFetch: 0, fetching: false };
+
+  function maybeFetchPileup(absIndex) {
+    if (!M.pileup || !hover.active) return;
+    const now = performance.now();
+    if (hover.fetching || now - hover.lastFetch < 300) return;
+    hover.fetching = true;
+    hover.lastFetch = now;
+    fetch("/pileup?pos=" + absIndex)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { hover.data = d; })
+      .catch(() => { hover.data = null; })
+      .finally(() => { hover.fetching = false; });
+  }
+
+  // --- canvas / render ---------------------------------------------------
+  let W = 0, H = 0, dpr = 1;
+  const CELL = 16;        // px per base
+  const CURSOR_FRAC = 0.72; // now-line horizontal position
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.floor(W * dpr);
+    canvas.height = Math.floor(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "600 13px ui-monospace, Menlo, Consolas, monospace";
+  }
+  window.addEventListener("resize", resize);
+
+  canvas.addEventListener("mousemove", (e) => {
+    hover.x = e.clientX; hover.y = e.clientY;
+    hover.active = M.pileup && Math.abs(e.clientX - W * CURSOR_FRAC) < 26;
+    canvas.style.cursor = hover.active ? "crosshair" : "default";
+  });
+  canvas.addEventListener("mouseleave", () => { hover.active = false; hover.data = null; });
+
+  function targetIndex() {
+    // wall-clock-derived position, clamped to what the server has revealed.
+    const local = (Date.now() / 1000 - M.startEpoch) * M.rate;
+    const t = Math.max(0, Math.min(local, M.maxRevealed, M.n));
+    return t;
+  }
+
+  function draw() {
+    requestAnimationFrame(draw);
+    if (!M.n) { ctx.clearRect(0, 0, W, H); return; }
+
+    const cursorX = W * CURSOR_FRAC;
+    const midY = H / 2;
+    const t = targetIndex();
+
+    ctx.clearRect(0, 0, W, H);
+
+    // baseline guide
+    ctx.strokeStyle = "rgba(255,255,255,0.05)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(W, midY); ctx.stroke();
+
+    // visible absolute index range
+    const leftIdx = Math.floor(t - cursorX / CELL) - 1;
+    const rightIdx = Math.ceil(t + (W - cursorX) / CELL) + 1;
+    const from = Math.max(M.bufStart, leftIdx);
+    const to = Math.min(M.bufStart + M.bases.length, rightIdx);
+
+    for (let k = from; k < to; k++) {
+      const ch = M.bases[k - M.bufStart];
+      const x = (k - t) * CELL + cursorX;
+      if (x < -CELL || x > W + CELL) continue;
+      if (x > cursorX + 0.5) continue; // never render past the now-line (no future)
+      // fade in the newest bases near the cursor
+      const dist = cursorX - x;
+      const alpha = dist < CELL * 1.5 ? 0.35 + 0.65 * (dist / (CELL * 1.5)) : 1;
+      ctx.globalAlpha = Math.max(0.25, Math.min(1, alpha));
+      ctx.fillStyle = baseColor(ch);
+      ctx.fillText(ch, x, midY);
+    }
+    ctx.globalAlpha = 1;
+
+    // now-line
+    ctx.strokeStyle = M.complete ? "rgba(242,193,78,0.8)" : "rgba(230,231,234,0.85)";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cursorX, midY - 46); ctx.lineTo(cursorX, midY + 46); ctx.stroke();
+
+    drawHoverColumn(cursorX, midY);
+    updateHud(t);
+  }
+
+  function drawHoverColumn(cursorX, midY) {
+    const absIndex = Math.floor(targetIndex());
+    if (hover.active) maybeFetchPileup(Math.max(0, Math.min(absIndex, M.maxRevealed - 1)));
+    if (!hover.active || !hover.data || !hover.data.bases) return;
+
+    const d = hover.data;
+    const sq = 13, gap = 3, step = sq + gap;
+    const cols = d.bases.length;
+    // stack upward from just above the baseline
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    for (let i = 0; i < cols; i++) {
+      const ch = d.bases[i];
+      const y = midY - 60 - i * step;
+      ctx.fillStyle = baseColor(ch);
+      ctx.fillRect(cursorX - sq / 2, y - sq / 2, sq, sq);
+    }
+    ctx.restore();
+    // label
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "var(--dim)";
+    ctx.fillStyle = "#9aa0a6";
+    ctx.fillText(`ref ${d.ref}  depth ${d.depth}`, cursorX, midY - 60 - cols * step - 6);
+  }
+
+  function updateHud(t) {
+    const idx = Math.min(Math.floor(t), M.n - 1);
+    const c = contigFor(idx);
+    if (c) {
+      el.ctg.textContent = c.name;
+      el.pos.textContent = c.coord.toLocaleString("en-US");
+    }
+    const pct = (t / M.n) * 100;
+    el.pct.textContent = pct.toFixed(3) + "%";
+  }
+
+  resize();
+  connect();
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

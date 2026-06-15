@@ -1,0 +1,11 @@
+{
+  "artifactsDir": "./artifacts",
+  "webDir": "./web",
+  "listen": "8080",
+  "startEpoch": "2026-07-01T00:00:00Z",
+  "rate": null,
+  "runtimeSeconds": 31536000,
+  "tail": 4096,
+  "tickMs": 250,
+  "pileup": null
+}

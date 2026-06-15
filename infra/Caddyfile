@@ -1,0 +1,17 @@
+# Caddy front for call-bases: automatic HTTPS + reverse proxy to the Node server.
+# Set the domain via the CALLBASES_DOMAIN environment variable (or hardcode it).
+#
+#   CALLBASES_DOMAIN=stream.example.org caddy run --config infra/Caddyfile
+#
+{$CALLBASES_DOMAIN} {
+	encode zstd gzip
+
+	# SSE must not be buffered: flush every write immediately.
+	@stream path /stream
+	reverse_proxy @stream 127.0.0.1:8080 {
+		flush_interval -1
+	}
+
+	# Everything else (/, /pileup) proxied normally.
+	reverse_proxy 127.0.0.1:8080
+}

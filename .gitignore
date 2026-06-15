@@ -1,5 +1,12 @@
 **/.claude/settings.local.json
 
+# call-bases build artifacts (large, generated offline) and local config
+artifacts/
+*.bin
+*.idx
+consensus.fa
+server/config.json
+
 # General
 .DS_Store
 .localized
