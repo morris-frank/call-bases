@@ -1,303 +1,709 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>maurice-frank</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/libertinus-sans@5.2.5/400.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/libertinus-sans@5.2.5/600.css">
-<style>
-  :root {
-    --bg: #F3EFEA;
-    --fg: #2D2825;
-    --dim: #8C7E72;
-    --A: #74b27f;
-    --C: #57add1;
-    --G: #ce9360;
-    --T: #D78A7A;
-    --N: #51463E;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font-family: "Libertinus Sans", ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
-  #stage { position: fixed; inset: 0; }
-  canvas { display: block; width: 100%; height: 100%; }
-  #hud { position: fixed; left: 0; right: 0; bottom: 0; padding: 18px 22px;
-    display: flex; justify-content: center; align-items: flex-end;
-    pointer-events: none; font-size: 13px; letter-spacing: .04em; }
-  #hud-top-right { position: fixed; top: 18px; right: 22px; text-align: right;
-    pointer-events: auto; line-height: 1.5; }
-  #hud-top-right .pct-reveal { opacity: 0; max-height: 0; overflow: hidden;
-    color: var(--dim); transition: opacity .2s ease, max-height .2s ease; }
-  #hud-top-right:hover .pct-reveal { opacity: 1; max-height: 2em; }
-  #hud-top-right .pct-reveal b { color: var(--fg); font-weight: 600; }
-  #rateText { color: var(--dim); }
-  #coord { position: fixed; font-size: 22px; letter-spacing: .02em;
-    text-align: center; white-space: nowrap; pointer-events: none;
-    transform: translateX(-50%); }
-  #coord .pos { color: var(--fg); }
-  #coord .ctg { color: var(--dim); }
-  #title { position: fixed; top: 18px; left: 22px; color: var(--dim);
-    font-size: 42px; font-weight: 400; letter-spacing: .02em; pointer-events: none; }
-  #repo { position: fixed; bottom: 18px; left: 22px; color: var(--dim);
-    font-size: 13px; text-decoration: none; opacity: .45; transition: opacity .2s ease; }
-  #repo:hover { opacity: .85; color: var(--fg); }
-  .hint { color: var(--dim); font-size: 11px; letter-spacing: .12em; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>maurice-frank</title>
+  <style>
+    :root {
+      --bg: #F3EFEA;
+      --fg: #2D2825;
+      --dim: #8C7E72;
+      --A: #74b27f;
+      --C: #57add1;
+      --G: #ce9360;
+      --T: #D78A7A;
+      --N: #51463E;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: "Andale Mono", "Andale Mono WT", monospace;
+      text-transform: lowercase;
+      overflow: hidden;
+    }
+
+    #stage {
+      position: fixed;
+      inset: 0;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #hud {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 18px 22px;
+      display: flex;
+      justify-content: center;
+      align-items: flex-end;
+      pointer-events: none;
+      font-size: 13px;
+      letter-spacing: .04em;
+    }
+
+    #hud-top-right {
+      position: fixed;
+      top: 18px;
+      right: 22px;
+      text-align: right;
+      pointer-events: auto;
+      line-height: 1.5;
+      font-size: 13px;
+      letter-spacing: .04em;
+    }
+
+    #hud-top-right .pct-reveal {
+      opacity: 0;
+      max-height: 0;
+      overflow: hidden;
+      color: var(--dim);
+      transition: opacity .2s ease, max-height .2s ease;
+    }
+
+    #hud-top-right:hover .pct-reveal {
+      opacity: 1;
+      max-height: 2em;
+    }
+
+    #hud-top-right .pct-reveal b {
+      color: var(--fg);
+      font-weight: 400;
+    }
+
+    #rateText {
+      color: var(--dim);
+    }
+
+    #coord {
+      position: fixed;
+      font-size: 18px;
+      letter-spacing: .02em;
+      text-align: center;
+      white-space: nowrap;
+      pointer-events: none;
+      transform: translateX(-50%);
+    }
+
+    #coord .pos {
+      color: var(--fg);
+    }
+
+    #coord .ctg {
+      color: var(--dim);
+    }
+
+    #title {
+      position: fixed;
+      top: 18px;
+      left: 22px;
+      color: var(--dim);
+      font-size: 13px;
+      font-weight: 400;
+      letter-spacing: .04em;
+      pointer-events: none;
+    }
+
+    #repo {
+      position: fixed;
+      bottom: 18px;
+      left: 22px;
+      color: var(--dim);
+      font-size: 13px;
+      text-decoration: none;
+      opacity: .45;
+      transition: opacity .2s ease;
+    }
+
+    #repo:hover {
+      opacity: .85;
+      color: var(--fg);
+    }
+
+    .hint {
+      color: var(--dim);
+      font-size: 11px;
+      letter-spacing: .12em;
+    }
+  </style>
 </head>
+
 <body>
   <div id="stage"><canvas id="c"></canvas></div>
   <div id="title">maurice-frank</div>
-  <a id="repo" href="https://github.com/morris-frank/call-bases" target="_blank" rel="noopener">&lt;/&gt;</a>
-  <div id="coord"><span class="ctg" id="ctg">&mdash;</span> <span class="pos" id="pos"></span></div>
+  <a id="repo"
+     href="https://github.com/morris-frank/call-bases"
+     target="_blank"
+     rel="noopener">&lt;/&gt;</a>
+  <div id="coord"><span class="ctg"
+          id="ctg">&mdash;</span> <span class="pos"
+          id="pos"></span></div>
   <div id="hud-top-right">
     <div id="rateText"></div>
     <div class="pct-reveal"><b id="pct">0.000%</b> revealed</div>
   </div>
   <div id="hud">
-    <div class="hint" id="hoverHint"></div>
+    <div class="hint"
+         id="hoverHint"></div>
   </div>
 
-<script>
-(() => {
-  "use strict";
+  <script>
+    (() => {
+      "use strict";
 
-  const COLORS = { A: "#74b27f", C: "#57add1", G: "#ce9360", T: "#D78A7A" };
-  const N_COLOR = "#51463E";
-  const baseColor = (ch) => COLORS[ch] || N_COLOR;
+      const COLORS = { A: "#74b27f", C: "#57add1", G: "#ce9360", T: "#D78A7A" };
+      const COMP = { A: "T", T: "A", C: "G", G: "C" };
+      const N_COLOR = "#51463E";
+      const baseColor = (ch) => COLORS[ch] || N_COLOR;
+      const complement = (ch) => COMP[ch] || "N";
+      const lc = (s) => String(s).toLowerCase();
+      const uc = (s) => String(s).toUpperCase();
 
-  const canvas = document.getElementById("c");
-  const ctx = canvas.getContext("2d");
-  const el = {
-    coord: document.getElementById("coord"),
-    ctg: document.getElementById("ctg"),
-    pos: document.getElementById("pos"),
-    pct: document.getElementById("pct"),
-    rate: document.getElementById("rateText"),
-    hoverHint: document.getElementById("hoverHint"),
-  };
+      const canvas = document.getElementById("c");
+      const ctx = canvas.getContext("2d");
+      const el = {
+        coord: document.getElementById("coord"),
+        ctg: document.getElementById("ctg"),
+        pos: document.getElementById("pos"),
+        pct: document.getElementById("pct"),
+        rate: document.getElementById("rateText"),
+        hoverHint: document.getElementById("hoverHint"),
+      };
 
-  // --- model -------------------------------------------------------------
-  const M = {
-    n: 0,
-    rate: 0,
-    startEpoch: 0,
-    pileup: false,
-    contigs: [],
-    // rolling buffer of revealed bases: bases[k - bufStart] is absolute index k
-    bufStart: 0,
-    bases: "",
-    maxRevealed: 0,
-    complete: false,
-    serverSkewMs: 0, // (serverIndexTime - localTime) implied offset, kept ~0
-  };
-  const BUF_CAP = 60000; // plenty for the visible window + a little history
+      // --- model -------------------------------------------------------------
+      const M = {
+        n: 0,
+        rate: 0,
+        startEpoch: 0,
+        pileup: false,
+        contigs: [],
+        bufStart: 0,
+        bases: "",
+        maxRevealed: 0,
+        complete: false,
+        serverSkewMs: 0,
+      };
+      const BUF_CAP = 60000;
 
-  function appendBases(fromIndex, str) {
-    if (!str) return;
-    if (M.bases.length === 0) {
-      M.bufStart = fromIndex;
-      M.bases = str;
-    } else {
-      M.bases += str;
-    }
-    M.maxRevealed = M.bufStart + M.bases.length;
-    if (M.bases.length > BUF_CAP) {
-      const drop = M.bases.length - BUF_CAP;
-      M.bases = M.bases.slice(drop);
-      M.bufStart += drop;
-    }
-  }
-
-  function resetBuffer(tailStart, tail, index) {
-    M.bufStart = tailStart;
-    M.bases = tail || "";
-    M.maxRevealed = Math.max(index, M.bufStart + M.bases.length);
-    if (M.bases.length < (index - M.bufStart)) {
-      // tail shorter than the gap (shouldn't happen) -> snap to index
-      M.bufStart = index;
-      M.bases = "";
-      M.maxRevealed = index;
-    }
-  }
-
-  function contigFor(pos) {
-    const c = M.contigs;
-    if (!c.length) return null;
-    let lo = 0, hi = c.length - 1, ans = 0;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (c[mid].start <= pos) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
-    }
-    return { name: c[ans].name, coord: pos - c[ans].start + 1 };
-  }
-
-  // --- SSE ---------------------------------------------------------------
-  function connect() {
-    const es = new EventSource("/stream");
-    es.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === "hello") {
-        M.n = msg.n; M.rate = msg.rate; M.startEpoch = msg.startEpoch;
-        M.pileup = msg.pileup; M.contigs = msg.contigs || [];
-        M.complete = false;
-        resetBuffer(msg.tailStart, msg.tail, msg.index);
-        el.rate.textContent = formatRate(M.rate);
-        el.hoverHint.textContent = M.pileup ? "hover the now-line for the pile-up" : "";
-      } else if (msg.type === "tick") {
-        // bases cover [prevMaxRevealed, msg.index)
-        appendBases(M.maxRevealed, msg.bases);
-        M.maxRevealed = Math.max(M.maxRevealed, msg.index);
-      } else if (msg.type === "complete") {
-        M.complete = true;
-        M.maxRevealed = M.n;
+      function appendBases(fromIndex, str) {
+        if (!str) return;
+        if (M.bases.length === 0) {
+          M.bufStart = fromIndex;
+          M.bases = str;
+        } else {
+          M.bases += str;
+        }
+        M.maxRevealed = M.bufStart + M.bases.length;
+        if (M.bases.length > BUF_CAP) {
+          const drop = M.bases.length - BUF_CAP;
+          M.bases = M.bases.slice(drop);
+          M.bufStart += drop;
+        }
       }
-    };
-    es.onerror = () => {};
-  }
 
-  function formatRate(r) {
-    if (r >= 1000) return (r / 1000).toFixed(2) + " kb/s";
-    if (r >= 1) return r.toFixed(1) + " b/s";
-    return r.toFixed(3) + " b/s";
-  }
+      function resetBuffer(tailStart, tail, index) {
+        M.bufStart = tailStart;
+        M.bases = tail || "";
+        M.maxRevealed = Math.max(index, M.bufStart + M.bases.length);
+        if (M.bases.length < (index - M.bufStart)) {
+          M.bufStart = index;
+          M.bases = "";
+          M.maxRevealed = index;
+        }
+      }
 
-  // --- hover pile-up -----------------------------------------------------
-  const hover = { active: false, x: 0, y: 0, data: null, lastFetch: 0, fetching: false };
+      function contigFor(pos) {
+        const c = M.contigs;
+        if (!c.length) return null;
+        let lo = 0, hi = c.length - 1, ans = 0;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (c[mid].start <= pos) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
+        }
+        return { name: c[ans].name, coord: pos - c[ans].start + 1 };
+      }
 
-  function maybeFetchPileup(absIndex) {
-    if (!M.pileup || !hover.active) return;
-    const now = performance.now();
-    if (hover.fetching || now - hover.lastFetch < 300) return;
-    hover.fetching = true;
-    hover.lastFetch = now;
-    fetch("/pileup?pos=" + absIndex)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { hover.data = d; })
-      .catch(() => { hover.data = null; })
-      .finally(() => { hover.fetching = false; });
-  }
+      // --- SSE ---------------------------------------------------------------
+      function connect() {
+        const es = new EventSource("/stream");
+        es.onmessage = (ev) => {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "hello") {
+            M.n = msg.n; M.rate = msg.rate; M.startEpoch = msg.startEpoch;
+            M.pileup = msg.pileup; M.contigs = msg.contigs || [];
+            M.complete = false;
+            resetBuffer(msg.tailStart, msg.tail, msg.index);
+            el.rate.textContent = formatRate(M.rate);
+            el.hoverHint.textContent = M.pileup ? "hover the now-line for the pile-up" : "";
+          } else if (msg.type === "tick") {
+            appendBases(M.maxRevealed, msg.bases);
+            M.maxRevealed = Math.max(M.maxRevealed, msg.index);
+          } else if (msg.type === "complete") {
+            M.complete = true;
+            M.maxRevealed = M.n;
+          }
+        };
+        es.onerror = () => { };
+      }
 
-  // --- canvas / render ---------------------------------------------------
-  let W = 0, H = 0, dpr = 1;
-  const CELL = 33;        // px per base
-  const CURSOR_FRAC = 0.72; // now-line horizontal position
-  const CURSOR_HALF = 46;   // now-line extends ±this px from midY
-  const FONT = '600 30px "Libertinus Sans", ui-sans-serif, sans-serif';
+      function formatRate(r) {
+        if (r >= 1000) return (r / 1000).toFixed(2) + " kb/s";
+        if (r >= 1) return r.toFixed(1) + " b/s";
+        return r.toFixed(3) + " b/s";
+      }
 
-  function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-    W = window.innerWidth; H = window.innerHeight;
-    canvas.width = Math.floor(W * dpr);
-    canvas.height = Math.floor(H * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = FONT;
-  }
-  window.addEventListener("resize", resize);
+      // --- view mode ---------------------------------------------------------
+      let pinnedView = "helix"; // "helix" | "chars"
+      let hoverPreviewSuppressed = false;
 
-  canvas.addEventListener("mousemove", (e) => {
-    hover.x = e.clientX; hover.y = e.clientY;
-    hover.active = M.pileup && Math.abs(e.clientX - W * CURSOR_FRAC) < 26;
-    canvas.style.cursor = hover.active ? "crosshair" : "default";
-  });
-  canvas.addEventListener("mouseleave", () => { hover.active = false; hover.data = null; });
+      function activeView() {
+        if (hover.helix && !hoverPreviewSuppressed) {
+          return pinnedView === "helix" ? "chars" : "helix";
+        }
+        return pinnedView;
+      }
 
-  function targetIndex() {
-    // wall-clock-derived position, clamped to what the server has revealed.
-    const local = (Date.now() / 1000 - M.startEpoch) * M.rate;
-    const t = Math.max(0, Math.min(local, M.maxRevealed, M.n));
-    return t;
-  }
+      // --- hover pile-up -----------------------------------------------------
+      const hover = { x: 0, y: 0, active: false, helix: false, data: null, lastFetch: 0, fetching: false };
 
-  function draw() {
-    requestAnimationFrame(draw);
-    ctx.fillStyle = "#F3EFEA";
-    ctx.fillRect(0, 0, W, H);
-    if (!M.n) return;
+      function maybeFetchPileup(absIndex) {
+        if (!M.pileup || !hover.active) return;
+        const now = performance.now();
+        if (hover.fetching || now - hover.lastFetch < 300) return;
+        hover.fetching = true;
+        hover.lastFetch = now;
+        fetch("/pileup?pos=" + absIndex)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => { hover.data = d; })
+          .catch(() => { hover.data = null; })
+          .finally(() => { hover.fetching = false; });
+      }
 
-    const cursorX = W * CURSOR_FRAC;
-    const midY = H / 2;
-    const t = targetIndex();
+      // --- canvas / render ---------------------------------------------------
+      let W = 0, H = 0, dpr = 1;
+      let CELL = 33;
+      const CURSOR_FRAC = 0.72;
+      let HELIX_AMP = 30;
+      const HELIX_PERIOD = 10.5;
+      const CYCLE_HW = 0.56; // peak-to-peak height / one period width
+      const CELL_MIN = 26;
+      const CELL_MAX = 46;
+      let HELIX_CURSOR_HALF = 50;
+      let CHAR_CURSOR_HALF = 20;
+      let animCursorHalf = 50;
+      let BASE_DOT = 3.2;
+      let BAR_WIDTH = 2.2;
+      let FONT = '400 11px "Andale Mono", "Andale Mono WT", monospace';
+      let CHAR_FONT = '400 33px "Andale Mono", "Andale Mono WT", monospace';
+      let PHASE = (Math.PI * 2) / HELIX_PERIOD;
 
-    // baseline guide
-    ctx.strokeStyle = "rgba(45, 40, 37, 0.08)";
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(W, midY); ctx.stroke();
+      let particles = [];
+      let wakeParticles = [];
+      let driftT = 0;
+      const WAKE_MAX = 700;
 
-    // visible absolute index range
-    const leftIdx = Math.floor(t - cursorX / CELL) - 1;
-    const rightIdx = Math.ceil(t + (W - cursorX) / CELL) + 1;
-    const from = Math.max(M.bufStart, leftIdx);
-    const to = Math.min(M.bufStart + M.bases.length, rightIdx);
+      function initParticles() {
+        const n = Math.floor((W * H) / 14000);
+        particles = [];
+        for (let i = 0; i < n; i++) {
+          particles.push({
+            x: Math.random() * W,
+            y: Math.random() * H,
+            r: Math.random() * 2.2 + 1.0,
+            vx: (Math.random() - 0.5) * 0.08,
+            vy: -(Math.random() * 0.06 + 0.01),
+            wobble: Math.random() * Math.PI * 2,
+            a: Math.random() * 0.145 + 0.712,
+          });
+        }
+        wakeParticles = [];
+      }
 
-    for (let k = from; k < to; k++) {
-      const ch = M.bases[k - M.bufStart];
-      const x = (k - t) * CELL + cursorX;
-      if (x < -CELL || x > W + CELL) continue;
-      if (x > cursorX + 0.5) continue; // never render past the now-line (no future)
-      // fade in the newest bases near the cursor
-      const dist = cursorX - x;
-      const alpha = dist < CELL * 1.5 ? 0.35 + 0.65 * (dist / (CELL * 1.5)) : 1;
-      ctx.globalAlpha = Math.max(0.25, Math.min(1, alpha));
-      ctx.fillStyle = baseColor(ch);
-      ctx.fillText(ch, x, midY);
-    }
-    ctx.globalAlpha = 1;
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        W = window.innerWidth; H = window.innerHeight;
+        canvas.width = Math.floor(W * dpr);
+        canvas.height = Math.floor(H * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        let amp = (H * 0.72) / 2;
+        CELL = (2 * amp) / (HELIX_PERIOD * CYCLE_HW);
+        if (CELL > CELL_MAX) {
+          CELL = CELL_MAX;
+          amp = (HELIX_PERIOD * CELL * CYCLE_HW) / 2;
+        } else if (CELL < CELL_MIN) {
+          CELL = CELL_MIN;
+          amp = (HELIX_PERIOD * CELL * CYCLE_HW) / 2;
+        }
+        HELIX_AMP = amp;
+        BASE_DOT = Math.max(4.8, HELIX_AMP * 0.1);
+        BAR_WIDTH = Math.max(3, HELIX_AMP * 0.052);
+        const fontPx = Math.round(Math.max(11, HELIX_AMP * 0.21));
+        const labelPx = Math.round(Math.max(10, HELIX_AMP * 0.19));
+        const charPx = labelPx * 3;
+        HELIX_CURSOR_HALF = HELIX_AMP + BASE_DOT + 4;
+        CHAR_CURSOR_HALF = Math.round(charPx * 0.52);
+        animCursorHalf = cursorHalf(activeView());
+        FONT = `400 ${fontPx}px "Andale Mono", "Andale Mono WT", monospace`;
+        CHAR_FONT = `400 ${charPx}px "Andale Mono", "Andale Mono WT", monospace`;
+        PHASE = (Math.PI * 2) / HELIX_PERIOD;
+        ctx.font = FONT;
+        initParticles();
+      }
+      window.addEventListener("resize", resize);
 
-    // now-line
-    ctx.strokeStyle = M.complete ? "rgba(206, 147, 96, 0.85)" : "rgba(45, 40, 37, 0.55)";
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(cursorX, midY - CURSOR_HALF); ctx.lineTo(cursorX, midY + CURSOR_HALF); ctx.stroke();
+      canvas.addEventListener("mousemove", (e) => {
+        hover.x = e.clientX; hover.y = e.clientY;
+        const cursorX = W * CURSOR_FRAC;
+        const midY = H / 2;
+        hover.active = M.pileup && Math.abs(e.clientX - cursorX) < 26;
+        const helixBand = HELIX_AMP + BASE_DOT + 18;
+        hover.helix = Math.abs(e.clientY - midY) < helixBand && e.clientX > -CELL && e.clientX < cursorX + 24;
+        if (hoverPreviewSuppressed && !hover.helix) hoverPreviewSuppressed = false;
+        canvas.style.cursor = hover.active ? "crosshair" : "default";
+      });
+      canvas.addEventListener("mouseleave", () => {
+        hover.active = false;
+        hover.helix = false;
+        hover.data = null;
+        hoverPreviewSuppressed = false;
+      });
+      canvas.addEventListener("click", () => {
+        if (hover.helix) {
+          pinnedView = pinnedView === "helix" ? "chars" : "helix";
+          hoverPreviewSuppressed = true;
+        }
+      });
 
-    drawHoverColumn(cursorX, midY);
-    updateHud(t, cursorX, midY);
-  }
+      function cursorHalf(view) {
+        return view === "helix" ? HELIX_CURSOR_HALF : CHAR_CURSOR_HALF;
+      }
 
-  function drawHoverColumn(cursorX, midY) {
-    const absIndex = Math.floor(targetIndex());
-    if (hover.active) maybeFetchPileup(Math.max(0, Math.min(absIndex, M.maxRevealed - 1)));
-    if (!hover.active || !hover.data || !hover.data.bases) return;
+      function targetIndex() {
+        const local = (Date.now() / 1000 - M.startEpoch) * M.rate;
+        return Math.max(0, Math.min(local, M.maxRevealed, M.n));
+      }
 
-    const d = hover.data;
-    const sq = 13, gap = 3, step = sq + gap;
-    const cols = d.bases.length;
-    // stack upward from just above the baseline
-    ctx.save();
-    ctx.globalAlpha = 0.92;
-    for (let i = 0; i < cols; i++) {
-      const ch = d.bases[i];
-      const y = midY - 60 - i * step;
-      ctx.fillStyle = baseColor(ch);
-      ctx.fillRect(cursorX - sq / 2, y - sq / 2, sq, sq);
-    }
-    ctx.restore();
-    // label
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "#8C7E72";
-    ctx.font = '400 12px "Libertinus Sans", ui-sans-serif, sans-serif';
-    ctx.fillText(`ref ${d.ref}  depth ${d.depth}`, cursorX, midY - 60 - cols * step - 6);
-    ctx.font = FONT;
-  }
+      function helixY(k, midY) {
+        const s = Math.sin(k * PHASE);
+        return { top: midY - HELIX_AMP * s, bot: midY + HELIX_AMP * s };
+      }
 
-  function updateHud(t, cursorX, midY) {
-    const idx = Math.min(Math.floor(t), M.n - 1);
-    const c = contigFor(idx);
-    if (c) {
-      el.ctg.textContent = c.name;
-      el.pos.textContent = c.coord.toLocaleString("en-US");
-    }
-    el.coord.style.left = cursorX + "px";
-    el.coord.style.top = (midY + CURSOR_HALF + 22) + "px";
-    const pct = (t / M.n) * 100;
-    el.pct.textContent = pct.toFixed(3) + "%";
-  }
+      function fadeAlpha(cursorX, x) {
+        const dist = cursorX - x;
+        const a = dist < CELL * 1.5 ? 0.3 + 0.7 * (dist / (CELL * 1.5)) : 1;
+        return Math.max(0.2, Math.min(1, a));
+      }
 
-  resize();
-  connect();
-  requestAnimationFrame(draw);
-})();
-</script>
+      function hexToRgb(hex) {
+        const h = hex.replace("#", "");
+        return {
+          r: parseInt(h.slice(0, 2), 16),
+          g: parseInt(h.slice(2, 4), 16),
+          b: parseInt(h.slice(4, 6), 16),
+        };
+      }
+
+      function rgba(hex, a) {
+        const { r, g, b } = hexToRgb(hex);
+        return `rgba(${r},${g},${b},${a})`;
+      }
+
+      function drawParticles(midY, dt) {
+        driftT += dt * 0.001;
+        ctx.save();
+        ctx.lineWidth = 1.1;
+        for (const p of particles) {
+          p.x += p.vx + Math.sin(driftT + p.wobble) * 0.04;
+          p.y += p.vy + Math.cos(driftT * 0.7 + p.wobble) * 0.025;
+          if (p.x < -8) p.x = W + 8;
+          if (p.x > W + 8) p.x = -8;
+          if (p.y < -8) p.y = H + 8;
+          if (p.y > H + 8) p.y = -8;
+          const nearHelix = 1 - Math.min(1, Math.abs(p.y - midY) / (HELIX_AMP + 40));
+          const a = p.a * (0.55 + nearHelix * 0.45);
+          ctx.strokeStyle = `rgba(140, 126, 114, ${a})`;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      function emitWake(from, to, t, cursorX, midY, dt) {
+        const chance = dt * 0.022;
+        for (let k = from; k < to; k++) {
+          const x = (k - t) * CELL + cursorX;
+          if (x < -CELL || x > cursorX + 0.5) continue;
+          if (Math.random() > chance) continue;
+
+          const bi = k - M.bufStart;
+          const ch = bi >= 0 && bi < M.bases.length ? M.bases[bi] : null;
+          const { top, bot } = helixY(k, midY);
+          const strands = [
+            { y: top, vy: -(Math.random() * 0.14 + 0.06), color: ch ? baseColor(ch) : N_COLOR },
+            { y: bot, vy: Math.random() * 0.14 + 0.06, color: ch ? baseColor(complement(ch)) : N_COLOR },
+          ];
+          for (const s of strands) {
+            if (wakeParticles.length >= WAKE_MAX) wakeParticles.shift();
+            wakeParticles.push({
+              x: x + (Math.random() - 0.5) * 3,
+              y: s.y + (Math.random() - 0.5) * 2,
+              vx: -(Math.random() * 0.35 + 0.2),
+              vy: s.vy,
+              r: Math.random() * 0.9 + 0.55,
+              life: Math.random() * 1.2 + 1.8,
+              decay: Math.random() * 0.00007 + 0.000035,
+              wobble: Math.random() * Math.PI * 2,
+              color: s.color,
+            });
+          }
+        }
+      }
+
+      function drawWake(dt) {
+        ctx.save();
+        for (let i = wakeParticles.length - 1; i >= 0; i--) {
+          const p = wakeParticles[i];
+          p.x += p.vx;
+          p.y += p.vy + Math.sin(driftT * 2.4 + p.wobble) * 0.015;
+          p.vx *= 0.998;
+          p.life -= p.decay * dt;
+          if (p.life <= 0 || p.x < -12 || p.y < -12 || p.y > H + 12) {
+            wakeParticles.splice(i, 1);
+            continue;
+          }
+          const a = Math.min(1, p.life * 1.5);
+          ctx.fillStyle = rgba(p.color, a * 0.88);
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      function emitCharParticles(from, to, t, cursorX, midY, dt) {
+        const chance = dt * 0.02;
+        for (let k = from; k < to; k++) {
+          const x = (k - t) * CELL + cursorX;
+          if (x < -CELL || x > cursorX + 0.5) continue;
+          if (Math.random() > chance) continue;
+          const bi = k - M.bufStart;
+          const ch = bi >= 0 && bi < M.bases.length ? M.bases[bi] : null;
+          if (!ch) continue;
+          const color = baseColor(ch);
+          const bursts = Math.random() < 0.35 ? [-1, 1] : [Math.random() < 0.5 ? -1 : 1];
+          for (const sign of bursts) {
+            if (wakeParticles.length >= WAKE_MAX) wakeParticles.shift();
+            wakeParticles.push({
+              x: x + (Math.random() - 0.5) * 4,
+              y: midY + (Math.random() - 0.5) * 3,
+              vx: -(Math.random() * 0.35 + 0.18),
+              vy: sign * (Math.random() * 0.14 + 0.06),
+              r: Math.random() * 0.9 + 0.55,
+              life: Math.random() * 1.2 + 1.8,
+              decay: Math.random() * 0.00007 + 0.000035,
+              wobble: Math.random() * Math.PI * 2,
+              color,
+            });
+          }
+        }
+      }
+
+      function drawCharList(from, to, t, cursorX, midY) {
+        ctx.save();
+        ctx.font = CHAR_FONT;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        for (let k = from; k < to; k++) {
+          const bi = k - M.bufStart;
+          if (bi < 0 || bi >= M.bases.length) continue;
+          const ch = M.bases[bi];
+          const x = (k - t) * CELL + cursorX;
+          if (x < -CELL || x > cursorX + 0.5) continue;
+          ctx.globalAlpha = fadeAlpha(cursorX, x);
+          ctx.fillStyle = baseColor(ch);
+          ctx.fillText(uc(ch), x, midY);
+        }
+        ctx.restore();
+      }
+
+      function drawBackbone(from, to, t, cursorX, midY) {
+        const drawStrand = (which) => {
+          ctx.beginPath();
+          let started = false;
+          for (let k = from; k < to; k++) {
+            const x = (k - t) * CELL + cursorX;
+            if (x < -CELL || x > cursorX + 0.5) continue;
+            const { top, bot } = helixY(k, midY);
+            const y = which === "top" ? top : bot;
+            if (!started) { ctx.moveTo(x, y); started = true; }
+            else ctx.lineTo(x, y);
+          }
+          if (!started) return;
+          ctx.strokeStyle = "rgba(45, 40, 37, 0.11)";
+          ctx.lineWidth = Math.max(1.6, HELIX_AMP * 0.028);
+          ctx.lineJoin = "round";
+          ctx.stroke();
+        };
+        drawStrand("top");
+        drawStrand("bot");
+      }
+
+      function drawBasePair(k, ch, t, cursorX, midY) {
+        const x = (k - t) * CELL + cursorX;
+        if (x < -CELL || x > W + CELL || x > cursorX + 0.5) return;
+        const alpha = fadeAlpha(cursorX, x);
+        const { top, bot } = helixY(k, midY);
+        const c1 = baseColor(ch);
+        const c2 = baseColor(complement(ch));
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+
+        const grad = ctx.createLinearGradient(x, top, x, bot);
+        grad.addColorStop(0, rgba(c1, 0.55));
+        grad.addColorStop(0.5, rgba(c1, 0.18));
+        grad.addColorStop(0.5, rgba(c2, 0.18));
+        grad.addColorStop(1, rgba(c2, 0.55));
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = BAR_WIDTH;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x, top);
+        ctx.lineTo(x, bot);
+        ctx.stroke();
+
+        ctx.shadowColor = rgba(c1, 0.35);
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = rgba(c1, 0.72);
+        ctx.beginPath();
+        ctx.arc(x, top, BASE_DOT, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.shadowColor = rgba(c2, 0.35);
+        ctx.fillStyle = rgba(c2, 0.72);
+        ctx.beginPath();
+        ctx.arc(x, bot, BASE_DOT, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.restore();
+      }
+
+      let lastFrame = performance.now();
+
+      function draw(now) {
+        requestAnimationFrame(draw);
+        const dt = now - lastFrame;
+        lastFrame = now;
+
+        ctx.fillStyle = "#F3EFEA";
+        ctx.fillRect(0, 0, W, H);
+        if (!M.n) return;
+
+        const cursorX = W * CURSOR_FRAC;
+        const midY = H / 2;
+        const t = targetIndex();
+
+        drawParticles(midY, dt);
+
+        const leftIdx = Math.floor(t - cursorX / CELL) - 1;
+        const rightIdx = Math.ceil(t + (W - cursorX) / CELL) + 1;
+        const from = Math.max(M.bufStart, leftIdx);
+        const to = Math.min(M.bufStart + M.bases.length, rightIdx);
+        const view = activeView();
+        const targetHalf = cursorHalf(view);
+        const ease = 1 - Math.exp(-dt * 0.014);
+        animCursorHalf += (targetHalf - animCursorHalf) * ease;
+
+        if (view === "helix") {
+          emitWake(from, to, t, cursorX, midY, dt);
+          drawBackbone(from, to, t, cursorX, midY);
+          drawWake(dt);
+          for (let k = from; k < to; k++) {
+            drawBasePair(k, M.bases[k - M.bufStart], t, cursorX, midY);
+          }
+        } else {
+          emitCharParticles(from, to, t, cursorX, midY, dt);
+          drawCharList(from, to, t, cursorX, midY);
+          drawWake(dt);
+        }
+
+        ctx.strokeStyle = M.complete ? "rgba(206, 147, 96, 0.85)" : "rgba(45, 40, 37, 0.55)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cursorX, midY - animCursorHalf);
+        ctx.lineTo(cursorX, midY + animCursorHalf);
+        ctx.stroke();
+
+        drawHoverColumn(cursorX, midY, t);
+        updateHud(t, cursorX, midY, animCursorHalf);
+      }
+
+      function drawHoverColumn(cursorX, midY, t) {
+        const absIndex = Math.floor(targetIndex());
+        if (hover.active) maybeFetchPileup(Math.max(0, Math.min(absIndex, M.maxRevealed - 1)));
+        if (!hover.active || !hover.data || !hover.data.bases) return;
+
+        const d = hover.data;
+        const sq = 11, gap = 3, step = sq + gap;
+        const cols = d.bases.length;
+        const { top } = helixY(Math.floor(t), midY);
+        const baseY = top - Math.round(HELIX_AMP * 0.48);
+
+        ctx.save();
+        ctx.globalAlpha = 0.88;
+        for (let i = 0; i < cols; i++) {
+          const ch = d.bases[i];
+          const y = baseY - i * step;
+          ctx.fillStyle = baseColor(ch);
+          ctx.beginPath();
+          ctx.arc(cursorX, y, sq / 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#8C7E72";
+        ctx.font = FONT;
+        ctx.fillText(`ref ${lc(d.ref)}  depth ${d.depth}`, cursorX, baseY - cols * step - 8);
+      }
+
+      function updateHud(t, cursorX, midY, half) {
+        const idx = Math.min(Math.floor(t), M.n - 1);
+        const c = contigFor(idx);
+        if (c) {
+          el.ctg.textContent = lc(c.name);
+          el.pos.textContent = c.coord.toLocaleString("en-US");
+        }
+        el.coord.style.left = cursorX + "px";
+        el.coord.style.top = (midY + half + 22) + "px";
+        el.pct.textContent = (t / M.n * 100).toFixed(3) + "%";
+      }
+
+      resize();
+      connect();
+      requestAnimationFrame(draw);
+    })();
+  </script>
 </body>
+
 </html>
