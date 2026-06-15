@@ -3,65 +3,70 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>call-bases</title>
+<title>morris-frank/call-bases</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/libertinus-sans@5.2.5/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/libertinus-sans@5.2.5/600.css">
 <style>
   :root {
-    --bg: #07080a;
-    --fg: #e6e7ea;
-    --dim: #6b7077;
-    --A: #4cc38a; /* green  */
-    --C: #4aa3ff; /* blue   */
-    --G: #f2c14e; /* amber  */
-    --T: #f2545b; /* red    */
-    --N: #4b5159; /* grey   */
+    --bg: #F3EFEA;
+    --fg: #2D2825;
+    --dim: #B8AC9D;
+    --A: #74b27f;
+    --C: #57add1;
+    --G: #ce9360;
+    --T: #D78A7A;
+    --N: #51463E;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow: hidden; }
+    font-family: "Libertinus Sans", ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
   #stage { position: fixed; inset: 0; }
   canvas { display: block; width: 100%; height: 100%; }
   #hud { position: fixed; left: 0; right: 0; bottom: 0; padding: 18px 22px;
-    display: flex; justify-content: space-between; align-items: flex-end;
+    display: flex; justify-content: flex-end; align-items: flex-end;
     pointer-events: none; font-size: 13px; letter-spacing: .04em; }
+  #hud-bottom-left { position: fixed; left: 22px; bottom: 18px; pointer-events: auto; }
+  #hud-bottom-left .pct-reveal { opacity: 0; max-height: 0; overflow: hidden;
+    color: var(--dim); line-height: 1.5;
+    transition: opacity .2s ease, max-height .2s ease; }
+  #hud-bottom-left:hover .pct-reveal { opacity: 1; max-height: 2em; }
+  #hud-bottom-left .pct-reveal b { color: var(--fg); font-weight: 600; }
+  #rateText { color: var(--dim); line-height: 1.5; }
   #coord { font-size: 22px; letter-spacing: .02em; }
   #coord .pos { color: var(--fg); }
   #coord .ctg { color: var(--dim); }
-  #right { text-align: right; color: var(--dim); line-height: 1.5; }
-  #right b { color: var(--fg); font-weight: 600; }
   #title { position: fixed; top: 18px; left: 22px; color: var(--dim);
-    font-size: 12px; letter-spacing: .35em; text-transform: uppercase; pointer-events: none; }
-  #status { position: fixed; top: 18px; right: 22px; color: var(--dim); font-size: 12px;
-    letter-spacing: .15em; text-transform: uppercase; pointer-events: none; }
-  #status.live b { color: var(--A); }
-  #status.done b { color: var(--G); }
+    font-size: 12px; letter-spacing: .04em; pointer-events: none; }
+  #repo { position: fixed; top: 18px; right: 22px; color: var(--dim);
+    font-size: 13px; text-decoration: none; opacity: .45; transition: opacity .2s ease; }
+  #repo:hover { opacity: .85; color: var(--fg); }
   .hint { color: var(--dim); font-size: 11px; letter-spacing: .12em; }
 </style>
 </head>
 <body>
   <div id="stage"><canvas id="c"></canvas></div>
-  <div id="title">call&middot;bases</div>
-  <div id="status"><b id="statusText">connecting</b></div>
-  <div id="hud">
+  <div id="title">morris-frank/call-bases</div>
+  <a id="repo" href="https://github.com/morris-frank/call-bases" target="_blank" rel="noopener">&lt;/&gt;</a>
+  <div id="hud-bottom-left">
     <div id="coord"><span class="ctg" id="ctg">&mdash;</span> <span class="pos" id="pos"></span></div>
-    <div id="right">
-      <div><b id="pct">0.000%</b> revealed</div>
-      <div id="rateText"></div>
-      <div class="hint" id="hoverHint"></div>
-    </div>
+    <div class="pct-reveal"><b id="pct">0.000%</b> revealed</div>
+    <div id="rateText"></div>
+  </div>
+  <div id="hud">
+    <div class="hint" id="hoverHint"></div>
   </div>
 
 <script>
 (() => {
   "use strict";
 
-  const COLORS = { A: "#4cc38a", C: "#4aa3ff", G: "#f2c14e", T: "#f2545b" };
-  const baseColor = (ch) => COLORS[ch] || "#4b5159";
+  const COLORS = { A: "#74b27f", C: "#57add1", G: "#ce9360", T: "#D78A7A" };
+  const N_COLOR = "#51463E";
+  const baseColor = (ch) => COLORS[ch] || N_COLOR;
 
   const canvas = document.getElementById("c");
   const ctx = canvas.getContext("2d");
   const el = {
-    statusBox: document.getElementById("status"),
-    status: document.getElementById("statusText"),
     ctg: document.getElementById("ctg"),
     pos: document.getElementById("pos"),
     pct: document.getElementById("pct"),
@@ -134,7 +139,6 @@
         M.pileup = msg.pileup; M.contigs = msg.contigs || [];
         M.complete = false;
         resetBuffer(msg.tailStart, msg.tail, msg.index);
-        setStatus(msg.index >= M.n ? "done" : "live");
         el.rate.textContent = formatRate(M.rate);
         el.hoverHint.textContent = M.pileup ? "hover the now-line for the pile-up" : "";
       } else if (msg.type === "tick") {
@@ -144,17 +148,11 @@
       } else if (msg.type === "complete") {
         M.complete = true;
         M.maxRevealed = M.n;
-        setStatus("done");
       }
     };
-    es.onerror = () => setStatus("reconnecting");
-    es.onopen = () => { if (!M.complete) setStatus("live"); };
+    es.onerror = () => {};
   }
 
-  function setStatus(s) {
-    el.statusBox.className = (s === "live") ? "live" : (s === "done" ? "done" : "");
-    el.status.textContent = s === "done" ? "complete" : s;
-  }
   function formatRate(r) {
     if (r >= 1000) return (r / 1000).toFixed(2) + " kb/s";
     if (r >= 1) return r.toFixed(1) + " b/s";
@@ -179,8 +177,9 @@
 
   // --- canvas / render ---------------------------------------------------
   let W = 0, H = 0, dpr = 1;
-  const CELL = 16;        // px per base
+  const CELL = 33;        // px per base
   const CURSOR_FRAC = 0.72; // now-line horizontal position
+  const FONT = '600 30px "Libertinus Sans", ui-sans-serif, sans-serif';
 
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -190,7 +189,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = "600 13px ui-monospace, Menlo, Consolas, monospace";
+    ctx.font = FONT;
   }
   window.addEventListener("resize", resize);
 
@@ -210,16 +209,16 @@
 
   function draw() {
     requestAnimationFrame(draw);
-    if (!M.n) { ctx.clearRect(0, 0, W, H); return; }
+    ctx.fillStyle = "#F3EFEA";
+    ctx.fillRect(0, 0, W, H);
+    if (!M.n) return;
 
     const cursorX = W * CURSOR_FRAC;
     const midY = H / 2;
     const t = targetIndex();
 
-    ctx.clearRect(0, 0, W, H);
-
     // baseline guide
-    ctx.strokeStyle = "rgba(255,255,255,0.05)";
+    ctx.strokeStyle = "rgba(45, 40, 37, 0.08)";
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(W, midY); ctx.stroke();
 
@@ -244,7 +243,7 @@
     ctx.globalAlpha = 1;
 
     // now-line
-    ctx.strokeStyle = M.complete ? "rgba(242,193,78,0.8)" : "rgba(230,231,234,0.85)";
+    ctx.strokeStyle = M.complete ? "rgba(206, 147, 96, 0.85)" : "rgba(45, 40, 37, 0.55)";
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(cursorX, midY - 46); ctx.lineTo(cursorX, midY + 46); ctx.stroke();
 
@@ -272,9 +271,10 @@
     ctx.restore();
     // label
     ctx.globalAlpha = 1;
-    ctx.fillStyle = "var(--dim)";
-    ctx.fillStyle = "#9aa0a6";
+    ctx.fillStyle = "#B8AC9D";
+    ctx.font = '400 12px "Libertinus Sans", ui-sans-serif, sans-serif';
     ctx.fillText(`ref ${d.ref}  depth ${d.depth}`, cursorX, midY - 60 - cols * step - 6);
+    ctx.font = FONT;
   }
 
   function updateHud(t) {
