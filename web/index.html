@@ -54,7 +54,7 @@
       justify-content: center;
       align-items: flex-end;
       pointer-events: none;
-      font-size: 13px;
+      font-size: 16px;
       letter-spacing: .04em;
     }
 
@@ -65,7 +65,7 @@
       text-align: right;
       pointer-events: auto;
       line-height: 1.5;
-      font-size: 13px;
+      font-size: 16px;
       letter-spacing: .04em;
     }
 
@@ -107,8 +107,8 @@
 
     #rateThrottle svg {
       display: block;
-      width: 13px;
-      height: 13px;
+      width: 16px;
+      height: 16px;
     }
 
     #rateText {
@@ -142,7 +142,7 @@
       top: 18px;
       left: 22px;
       color: var(--dim);
-      font-size: 13px;
+      font-size: 16px;
       font-weight: 400;
       letter-spacing: .04em;
       pointer-events: none;
@@ -153,7 +153,7 @@
       bottom: 18px;
       left: 22px;
       color: var(--dim);
-      font-size: 13px;
+      font-size: 16px;
       text-decoration: none;
       opacity: .45;
       transition: opacity .2s ease;
@@ -207,12 +207,7 @@
   <div id="hud-top-right">
     <div id="rateRow">
       <span id="rateThrottle" aria-hidden="true" title="throttled playback">
-        <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <ellipse cx="7.5" cy="10" rx="5.2" ry="3.4" stroke="currentColor" stroke-width="1.35"/>
-          <path d="M3.2 10.2c0-3.2 2-5.6 4.3-5.6s4.3 2.4 4.3 5.6" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
-          <circle cx="11.8" cy="8.1" r="1.15" stroke="currentColor" stroke-width="1.15"/>
-          <path d="M3.8 12.1v1.35M5.8 12.1v1.35M9.2 12.1v1.35M11.2 12.1v1.35" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/>
-        </svg>
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" id="mdi-tortoise" width="24" height="24" viewBox="0 0 24 24"><path d="M19.31,5.6C18.09,5.56 16.88,6.5 16.5,8C16,10 16,10 15,11C13,13 10,14 4,15C3,15.16 2.5,15.5 2,16C4,16 6,16 4.5,17.5L3,19H6L8,17C10,18 11.33,18 13.33,17L14,19H17L16,16C16,16 17,12 18,11C19,10 19,11 20,11C21,11 22,10 22,8.5C22,8 22,7 20.5,6C20.15,5.76 19.74,5.62 19.31,5.6M9,6A6,6 0 0,0 3,12C3,12.6 3.13,13.08 3.23,13.6C9.15,12.62 12.29,11.59 13.93,9.94L14.43,9.44C13.44,7.34 11.32,6 9,6Z" /></svg>
       </span>
       <div id="rateText"></div>
     </div>
@@ -456,6 +451,16 @@
       let W = 0, H = 0, dpr = 1;
       let CELL = 33;
       const CURSOR_FRAC = 0.72;
+      const CURSOR_GAP = 3;
+      const CURSOR_FG_COLOR = "#2D2825";
+      const CURSOR_COMPLETE_COLOR = "#ce9360";
+      const BG_COLOR = "#F3EFEA";
+      const DIM_COLOR = "#8C7E72";
+      const WHITE_COLOR = "#ffffff";
+      const BACKBONE_MIX_PCT = 9.5;
+      const MIN_FG_PCT = 95;
+      const MONO_MAX_PCT = 10;
+      const narrowMq = window.matchMedia("(max-width: 640px)");
       let HELIX_AMP = 30;
       const HELIX_PERIOD = 10.5;
       const CYCLE_HW = 0.56; // peak-to-peak height / one period width
@@ -467,7 +472,6 @@
       let BASE_DOT = 3.2;
       let BAR_WIDTH = 2.2;
       let BACKBONE_WIDTH = 8;
-      const MIN_ALPHA = 0.95;
       let FONT = '400 11px "Andale Mono", "Andale Mono WT", monospace';
       let CHAR_FONT = '400 33px "Andale Mono", "Andale Mono WT", monospace';
       let PHASE = (Math.PI * 2) / HELIX_PERIOD;
@@ -476,18 +480,30 @@
       let wakeParticles = [];
       let driftT = 0;
       const WAKE_MAX = 700;
-      const BG_RGB = { r: 243, g: 239, b: 234 };
-      const GRAY_RGB = { r: 140, g: 126, b: 114 };
+      const WAKE_SPEED_EXIT = 0.52;
+      const WAKE_SPEED_DONE = 0.04;
       const PARTICLE_CAP = 180;
       const GRAY_BUCKETS = 12;
 
-      function monoParticleRgb(gray) {
-        const t = Math.max(0, Math.min(1, gray));
-        return {
-          r: Math.round(BG_RGB.r + (GRAY_RGB.r - BG_RGB.r) * t),
-          g: Math.round(BG_RGB.g + (GRAY_RGB.g - BG_RGB.g) * t),
-          b: Math.round(BG_RGB.b + (GRAY_RGB.b - BG_RGB.b) * t),
-        };
+      function colorMix(bg, fg, fgPct) {
+        return `color-mix(in oklab, ${bg} ${100 - fgPct}%, ${fg} ${fgPct}%)`;
+      }
+
+      function fadeFgPct(cursorX, x) {
+        const dist = cursorX - x;
+        const pct = dist < CELL * 1.5
+          ? MIN_FG_PCT + (100 - MIN_FG_PCT) * (dist / (CELL * 1.5))
+          : 100;
+        return Math.max(MIN_FG_PCT, Math.min(100, pct));
+      }
+
+      function wakeHighlightColor(hex) {
+        const roll = Math.random();
+        let mixPct;
+        if (roll < 0.2) mixPct = 86 + Math.random() * 14;
+        else if (roll < 0.58) mixPct = 55 + Math.random() * 36;
+        else mixPct = 34 + Math.random() * 30;
+        return colorMix(hex, WHITE_COLOR, mixPct);
       }
 
       function buildShapePaths() {
@@ -516,7 +532,7 @@
         for (let i = 0; i < n; i++) {
           const gray = Math.random();
           const bucket = Math.min(GRAY_BUCKETS - 1, Math.floor(gray * GRAY_BUCKETS));
-          const { r, g, b } = monoParticleRgb((bucket + 0.5) / GRAY_BUCKETS);
+          const mixPct = ((bucket + 0.5) / GRAY_BUCKETS) * MONO_MAX_PCT;
           particles.push({
             x: Math.random() * W,
             y: Math.random() * H,
@@ -526,13 +542,12 @@
             vx: (Math.random() - 0.5) * 0.1,
             vy: -(Math.random() * 0.08 + 0.008),
             wobble: Math.random() * Math.PI * 2,
-            a: MIN_ALPHA + gray * (1 - MIN_ALPHA),
-            aFill: MIN_ALPHA + gray * (1 - MIN_ALPHA) * 0.85,
+            mixPct,
+            fillMixPct: mixPct * 0.85,
             lw: Math.random() * 1.8 + 0.35,
-            stroke: `rgb(${r},${g},${b})`,
           });
         }
-        particles.sort((a, b) => (a.stroke < b.stroke ? -1 : a.stroke > b.stroke ? 1 : 0));
+        particles.sort((a, b) => a.mixPct - b.mixPct);
         wakeParticles = [];
       }
 
@@ -578,7 +593,7 @@
 
       canvas.addEventListener("mousemove", (e) => {
         hover.x = e.clientX; hover.y = e.clientY;
-        const cursorX = W * CURSOR_FRAC;
+        const cursorX = cursorXPos();
         const midY = H / 2;
         hover.active = M.pileup && Math.abs(e.clientX - cursorX) < 26;
         const helixBand = HELIX_AMP + BASE_DOT + 18;
@@ -599,6 +614,19 @@
         }
       });
 
+      function cursorXPos() {
+        if (narrowMq.matches) return W - CURSOR_GAP;
+        return W * CURSOR_FRAC;
+      }
+
+      function cursorStrokeColor() {
+        return M.complete ? CURSOR_COMPLETE_COLOR : CURSOR_FG_COLOR;
+      }
+
+      function backboneColor() {
+        return colorMix(BG_COLOR, cursorStrokeColor(), BACKBONE_MIX_PCT);
+      }
+
       function cursorHalf(view) {
         return view === "helix" ? HELIX_CURSOR_HALF : CHAR_CURSOR_HALF;
       }
@@ -612,45 +640,6 @@
         return { top: midY - HELIX_AMP * s, bot: midY + HELIX_AMP * s };
       }
 
-      function fadeAlpha(cursorX, x) {
-        const dist = cursorX - x;
-        const a = dist < CELL * 1.5 ? MIN_ALPHA + (1 - MIN_ALPHA) * (dist / (CELL * 1.5)) : 1;
-        return Math.max(MIN_ALPHA, Math.min(1, a));
-      }
-
-      function hexToRgb(hex) {
-        const h = hex.replace("#", "");
-        return {
-          r: parseInt(h.slice(0, 2), 16),
-          g: parseInt(h.slice(2, 4), 16),
-          b: parseInt(h.slice(4, 6), 16),
-        };
-      }
-
-      function rgba(hex, a) {
-        const { r, g, b } = hexToRgb(hex);
-        return `rgba(${r},${g},${b},${a})`;
-      }
-
-      function wakeHighlightColor(hex) {
-        const { r, g, b } = hexToRgb(hex);
-        const roll = Math.random();
-        let mix;
-        if (roll < 0.2) {
-          mix = 0.86 + Math.random() * 0.14;
-        } else if (roll < 0.58) {
-          mix = 0.55 + Math.random() * 0.36;
-        } else {
-          mix = 0.34 + Math.random() * 0.3;
-        }
-        const jitter = () => (Math.random() - 0.5) * (16 + Math.random() * 56);
-        const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
-        const nr = clamp(r + (255 - r) * mix + jitter());
-        const ng = clamp(g + (255 - g) * mix + jitter());
-        const nb = clamp(b + (255 - b) * mix + jitter());
-        return `rgb(${nr},${ng},${nb})`;
-      }
-
       function clipLeftOfCursor(cursorX) {
         ctx.beginPath();
         ctx.rect(0, 0, cursorX, H);
@@ -662,6 +651,7 @@
         ctx.save();
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
+        let lastFill = "";
         let lastStroke = "";
         for (const p of particles) {
           p.x += p.vx + Math.sin(driftT + p.wobble) * 0.04;
@@ -671,20 +661,25 @@
           if (p.y < -8) p.y = H + 8;
           if (p.y > H + 8) p.y = -8;
           const nearHelix = 1 - Math.min(1, Math.abs(p.y - midY) / (HELIX_AMP + 40));
-          const helixA = MIN_ALPHA + nearHelix * (1 - MIN_ALPHA);
-          if (p.stroke !== lastStroke) {
-            ctx.strokeStyle = p.stroke;
-            ctx.fillStyle = p.stroke;
-            lastStroke = p.stroke;
+          const boost = nearHelix * (100 - MIN_FG_PCT);
+          const fillPct = Math.min(100, p.fillMixPct + boost);
+          const strokePct = Math.min(100, p.mixPct + boost);
+          const fillStyle = colorMix(BG_COLOR, DIM_COLOR, fillPct);
+          const strokeStyle = colorMix(BG_COLOR, DIM_COLOR, strokePct);
+          if (fillStyle !== lastFill) {
+            ctx.fillStyle = fillStyle;
+            lastFill = fillStyle;
+          }
+          if (strokeStyle !== lastStroke) {
+            ctx.strokeStyle = strokeStyle;
+            lastStroke = strokeStyle;
           }
           const rot = p.rot + Math.sin(driftT * 0.5 + p.wobble) * 0.08;
           const sc = p.r * 2.6;
           const c = Math.cos(rot) * sc * dpr;
           const s = Math.sin(rot) * sc * dpr;
           ctx.setTransform(c, s, -s, c, p.x * dpr, p.y * dpr);
-          ctx.globalAlpha = p.aFill * helixA;
           ctx.fill(shapePaths[p.shape]);
-          ctx.globalAlpha = p.a * helixA;
           ctx.lineWidth = p.lw;
           ctx.stroke(shapePaths[p.shape]);
         }
@@ -700,21 +695,49 @@
         const stream = wakeStreamPxPerMs();
         const outVy = Math.max(0.04, stream * 0.35);
         const sign = y < midY ? -1 : 1;
-        const life = Math.random() * 0.9 + 1.2;
+        const vx = -stream * (0.9 + Math.random() * 0.2);
+        const vy = sign * (Math.random() * outVy + outVy * 0.4);
         wakeParticles.push({
           x,
           y,
-          vx: -stream * (0.9 + Math.random() * 0.2),
-          vy: sign * (Math.random() * outVy + outVy * 0.4),
-          r: Math.random() * 3.6 + 0.45,
-          life,
-          life0: life,
-          decay: Math.random() * 0.00015 + 0.00008,
+          vx,
+          vy,
+          v0: Math.hypot(vx, vy) || 1,
+          r0: Math.random() * 3.6 + 0.45,
+          exit: Math.random() < 0.5 ? "grow" : "shrink",
           wobble: Math.random() * Math.PI * 2,
           color,
           drag: 0.962 + Math.random() * 0.012,
           vyDrag: 0.938 + Math.random() * 0.012,
         });
+      }
+
+      function wakeSpeedFrac(p) {
+        return Math.hypot(p.vx, p.vy) / (p.v0 || 1);
+      }
+
+      function wakeExitT(p) {
+        const speedFrac = wakeSpeedFrac(p);
+        if (speedFrac >= WAKE_SPEED_EXIT) return 0;
+        return 1 - speedFrac / WAKE_SPEED_EXIT;
+      }
+
+      function wakeExitState(p, exitT) {
+        if (exitT <= 0) {
+          return { r: p.r0, fgPct: 100, done: false };
+        }
+        if (p.exit === "grow") {
+          return {
+            r: p.r0 * (1 + exitT * 0.55),
+            fgPct: (1 - exitT) * 100,
+            done: exitT >= 0.98,
+          };
+        }
+        return {
+          r: p.r0 * (1 - exitT),
+          fgPct: (1 - exitT) * 100,
+          done: exitT >= 0.98 || p.r0 * (1 - exitT) < 0.12,
+        };
       }
 
       function emitWake(from, to, t, cursorX, midY, dt) {
@@ -754,19 +777,18 @@
           const vyDrag = Math.pow(p.vyDrag ?? 0.944, dragPow);
           p.vx *= drag;
           p.vy *= vyDrag;
-          p.life -= p.decay * dt;
-          if (p.life <= 0 || p.x < -12 || p.x > cursorX + 0.5 || p.y < -12 || p.y > H + 12) {
+          const speedFrac = wakeSpeedFrac(p);
+          const exitT = wakeExitT(p);
+          const { r, fgPct, done } = wakeExitState(p, exitT);
+          if (done || speedFrac < WAKE_SPEED_DONE || p.x < -12 || p.x > cursorX + 0.5 || p.y < -12 || p.y > H + 12) {
             wakeParticles.splice(i, 1);
             continue;
           }
-          const fade = p.life / (p.life0 || 1);
-          ctx.globalAlpha = MIN_ALPHA + fade * (1 - MIN_ALPHA);
-          ctx.fillStyle = p.color;
+          ctx.fillStyle = colorMix(BG_COLOR, p.color, Math.max(0, fgPct));
           ctx.beginPath();
-          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
           ctx.fill();
         }
-        ctx.globalAlpha = 1;
         ctx.restore();
       }
 
@@ -799,8 +821,7 @@
           const ch = M.bases[bi];
           const x = (k - t) * CELL + cursorX;
           if (x < -CELL || x > cursorX + 0.5) continue;
-          ctx.globalAlpha = fadeAlpha(cursorX, x);
-          ctx.fillStyle = baseColor(ch);
+          ctx.fillStyle = colorMix(BG_COLOR, baseColor(ch), fadeFgPct(cursorX, x));
           ctx.fillText(uc(ch), x, midY);
         }
         ctx.restore();
@@ -819,7 +840,7 @@
             else ctx.lineTo(x, y);
           }
           if (!started) return;
-          ctx.strokeStyle = "rgba(45, 40, 37, 0.95)";
+          ctx.strokeStyle = backboneColor();
           ctx.lineWidth = BACKBONE_WIDTH;
           ctx.lineJoin = "round";
           ctx.stroke();
@@ -831,19 +852,16 @@
       function drawBasePair(k, ch, t, cursorX, midY) {
         const x = (k - t) * CELL + cursorX;
         if (x < -CELL || x > W + CELL || x > cursorX + 0.5) return;
-        const alpha = fadeAlpha(cursorX, x);
+        const fgPct = fadeFgPct(cursorX, x);
         const { top, bot } = helixY(k, midY);
         const c1 = baseColor(ch);
         const c2 = baseColor(complement(ch));
 
-        ctx.save();
-        ctx.globalAlpha = alpha;
-
         const grad = ctx.createLinearGradient(x, top, x, bot);
-        grad.addColorStop(0, rgba(c1, MIN_ALPHA));
-        grad.addColorStop(0.5, rgba(c1, MIN_ALPHA));
-        grad.addColorStop(0.5, rgba(c2, MIN_ALPHA));
-        grad.addColorStop(1, rgba(c2, MIN_ALPHA));
+        grad.addColorStop(0, colorMix(BG_COLOR, c1, fgPct));
+        grad.addColorStop(0.5, colorMix(BG_COLOR, c1, fgPct));
+        grad.addColorStop(0.5, colorMix(BG_COLOR, c2, fgPct));
+        grad.addColorStop(1, colorMix(BG_COLOR, c2, fgPct));
         ctx.strokeStyle = grad;
         ctx.lineWidth = BAR_WIDTH;
         ctx.lineCap = "round";
@@ -851,14 +869,13 @@
         ctx.moveTo(x, top);
         ctx.lineTo(x, bot);
         ctx.stroke();
-        ctx.restore();
 
-        ctx.fillStyle = c1;
+        ctx.fillStyle = colorMix(BG_COLOR, c1, fgPct);
         ctx.beginPath();
         ctx.arc(x, top, BASE_DOT, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = c2;
+        ctx.fillStyle = colorMix(BG_COLOR, c2, fgPct);
         ctx.beginPath();
         ctx.arc(x, bot, BASE_DOT, 0, Math.PI * 2);
         ctx.fill();
@@ -871,13 +888,13 @@
         const dt = now - lastFrame;
         lastFrame = now;
 
-        ctx.fillStyle = "#F3EFEA";
+        ctx.fillStyle = BG_COLOR;
         ctx.fillRect(0, 0, W, H);
         if (!M.n) return;
 
         advanceDisplay(dt);
 
-        const cursorX = W * CURSOR_FRAC;
+        const cursorX = cursorXPos();
         const midY = H / 2;
         const t = targetIndex();
 
@@ -909,7 +926,7 @@
 
         drawWake(dt, cursorX);
 
-        ctx.strokeStyle = M.complete ? "rgba(206, 147, 96, 0.95)" : "rgba(45, 40, 37, 0.95)";
+        ctx.strokeStyle = cursorStrokeColor();
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(cursorX, midY - animCursorHalf);
@@ -933,24 +950,20 @@
 
         ctx.save();
         clipLeftOfCursor(cursorX);
-        ctx.globalAlpha = MIN_ALPHA;
         for (let i = 0; i < cols; i++) {
           const ch = d.bases[i];
           const y = baseY - i * step;
-          ctx.fillStyle = baseColor(ch);
+          ctx.fillStyle = colorMix(BG_COLOR, baseColor(ch), MIN_FG_PCT);
           ctx.beginPath();
           ctx.arc(cursorX, y, sq / 2, 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.restore();
 
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = "#8C7E72";
+        ctx.fillStyle = DIM_COLOR;
         ctx.font = FONT;
         ctx.fillText(`ref ${lc(d.ref)}  depth ${d.depth}`, cursorX, baseY - cols * step - 8);
       }
-
-      const narrowMq = window.matchMedia("(max-width: 640px)");
 
       function updateHud(t, cursorX, midY, half) {
         const idx = playheadIndex();
@@ -961,7 +974,7 @@
         }
         if (narrowMq.matches) {
           el.coord.style.left = "";
-          el.coord.style.right = "3px";
+          el.coord.style.right = CURSOR_GAP + "px";
         } else {
           el.coord.style.right = "";
           el.coord.style.left = cursorX + "px";
