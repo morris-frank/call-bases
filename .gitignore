@@ -1,3 +1,9 @@
+*cram
+*crai
+out/
+*tsv
+*fai
+
 **/.claude/settings.local.json
 
 # call-bases build artifacts (large, generated offline) and local config
