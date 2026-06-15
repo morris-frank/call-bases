@@ -11,11 +11,6 @@
       --bg: #F3EFEA;
       --fg: #2D2825;
       --dim: #8C7E72;
-      --A: #74b27f;
-      --C: #57add1;
-      --G: #ce9360;
-      --T: #D78A7A;
-      --N: #51463E;
     }
 
     * {
@@ -36,9 +31,24 @@
     #stage {
       position: fixed;
       inset: 0;
+      background: var(--bg);
+    }
+
+    #stage::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      pointer-events: none;
+      opacity: 0.05;
+      mix-blend-mode: multiply;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 256px 256px;
     }
 
     canvas {
+      position: relative;
+      z-index: 1;
       display: block;
       width: 100%;
       height: 100%;
@@ -223,6 +233,7 @@
       "use strict";
 
       const COLORS = { A: "#74b27f", C: "#57add1", G: "#ce9360", T: "#D78A7A" };
+      const BASE_COLOR_MIX_PCT = 85;
       const COMP = { A: "T", T: "A", C: "G", G: "C" };
       const N_COLOR = "#51463E";
       const baseColor = (ch) => COLORS[ch] || N_COLOR;
@@ -487,6 +498,15 @@
 
       function colorMix(bg, fg, fgPct) {
         return `color-mix(in oklab, ${bg} ${100 - fgPct}%, ${fg} ${fgPct}%)`;
+      }
+
+      for (const k of Object.keys(COLORS)) {
+        COLORS[k] = colorMix(BG_COLOR, COLORS[k], BASE_COLOR_MIX_PCT);
+      }
+
+      function hash01(k) {
+        const x = Math.sin(k * 12.9898 + 78.233) * 43758.5453;
+        return x - Math.floor(x);
       }
 
       function fadeFgPct(cursorX, x) {
@@ -822,7 +842,11 @@
           const x = (k - t) * CELL + cursorX;
           if (x < -CELL || x > cursorX + 0.5) continue;
           ctx.fillStyle = colorMix(BG_COLOR, baseColor(ch), fadeFgPct(cursorX, x));
-          ctx.fillText(uc(ch), x, midY);
+          ctx.save();
+          ctx.translate(x + (hash01(k) - 0.5) * 2, midY + (hash01(k + 99) - 0.5) * 1.5);
+          ctx.rotate((hash01(k + 7) - 0.5) * 0.06);
+          ctx.fillText(uc(ch), 0, 0);
+          ctx.restore();
         }
         ctx.restore();
       }
@@ -857,16 +881,17 @@
         const c1 = baseColor(ch);
         const c2 = baseColor(complement(ch));
 
-        const grad = ctx.createLinearGradient(x, top, x, bot);
-        grad.addColorStop(0, colorMix(BG_COLOR, c1, fgPct));
-        grad.addColorStop(0.5, colorMix(BG_COLOR, c1, fgPct));
-        grad.addColorStop(0.5, colorMix(BG_COLOR, c2, fgPct));
-        grad.addColorStop(1, colorMix(BG_COLOR, c2, fgPct));
-        ctx.strokeStyle = grad;
+        const mid = (top + bot) / 2;
         ctx.lineWidth = BAR_WIDTH;
         ctx.lineCap = "round";
+        ctx.strokeStyle = colorMix(BG_COLOR, c1, fgPct);
         ctx.beginPath();
         ctx.moveTo(x, top);
+        ctx.lineTo(x, mid);
+        ctx.stroke();
+        ctx.strokeStyle = colorMix(BG_COLOR, c2, fgPct);
+        ctx.beginPath();
+        ctx.moveTo(x, mid);
         ctx.lineTo(x, bot);
         ctx.stroke();
 
