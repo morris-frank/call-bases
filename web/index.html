@@ -483,14 +483,15 @@
           particles.push({
             x: Math.random() * W,
             y: Math.random() * H,
-            r: Math.random() * 3.8 + 0.5,
+            r: Math.random() * 9 + 0.25,
             shape: Math.floor(Math.random() * shapePaths.length),
             rot: Math.random() * Math.PI * 2,
             vx: (Math.random() - 0.5) * 0.1,
             vy: -(Math.random() * 0.08 + 0.008),
             wobble: Math.random() * Math.PI * 2,
-            a: 0.14 + gray * 0.38,
-            lw: Math.random() * 1.4 + 0.5,
+            a: 0.07 + gray * 0.16,
+            aFill: 0.015 + gray * 0.045,
+            lw: Math.random() * 1.8 + 0.35,
             stroke: `rgb(${r},${g},${b})`,
           });
         }
@@ -599,10 +600,9 @@
         ctx.clip();
       }
 
-      function drawParticles(midY, dt, cursorX) {
+      function drawParticles(midY, dt) {
         driftT += dt * 0.001;
         ctx.save();
-        clipLeftOfCursor(cursorX);
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
         let lastStroke = "";
@@ -614,9 +614,10 @@
           if (p.y < -8) p.y = H + 8;
           if (p.y > H + 8) p.y = -8;
           const nearHelix = 1 - Math.min(1, Math.abs(p.y - midY) / (HELIX_AMP + 40));
-          ctx.globalAlpha = p.a * (0.5 + nearHelix * 0.5);
+          const helixA = 0.45 + nearHelix * 0.55;
           if (p.stroke !== lastStroke) {
             ctx.strokeStyle = p.stroke;
+            ctx.fillStyle = p.stroke;
             lastStroke = p.stroke;
           }
           const rot = p.rot + Math.sin(driftT * 0.5 + p.wobble) * 0.08;
@@ -624,10 +625,39 @@
           const c = Math.cos(rot) * sc * dpr;
           const s = Math.sin(rot) * sc * dpr;
           ctx.setTransform(c, s, -s, c, p.x * dpr, p.y * dpr);
+          ctx.globalAlpha = p.aFill * helixA;
+          ctx.fill(shapePaths[p.shape]);
+          ctx.globalAlpha = p.a * helixA;
           ctx.lineWidth = p.lw;
           ctx.stroke(shapePaths[p.shape]);
         }
         ctx.restore();
+      }
+
+      function wakeStreamPxPerMs() {
+        return playbackRate() * CELL / 1000;
+      }
+
+      function spawnWakeParticle(x, y, color, midY) {
+        if (wakeParticles.length >= WAKE_MAX) wakeParticles.shift();
+        const stream = wakeStreamPxPerMs();
+        const outVy = Math.max(0.04, stream * 0.35);
+        const sign = y < midY ? -1 : 1;
+        const life = Math.random() * 0.9 + 1.2;
+        wakeParticles.push({
+          x,
+          y,
+          vx: -stream * (0.9 + Math.random() * 0.2),
+          vy: sign * (Math.random() * outVy + outVy * 0.4),
+          r: Math.random() * 2.8 + 1.1,
+          life,
+          life0: life,
+          decay: Math.random() * 0.00015 + 0.00008,
+          wobble: Math.random() * Math.PI * 2,
+          color,
+          drag: 0.962 + Math.random() * 0.012,
+          vyDrag: 0.938 + Math.random() * 0.012,
+        });
       }
 
       function emitWake(from, to, t, cursorX, midY, dt) {
@@ -641,22 +671,16 @@
           const ch = bi >= 0 && bi < M.bases.length ? M.bases[bi] : null;
           const { top, bot } = helixY(k, midY);
           const strands = [
-            { y: top, vy: -(Math.random() * 0.14 + 0.06), color: ch ? baseColor(ch) : N_COLOR },
-            { y: bot, vy: Math.random() * 0.14 + 0.06, color: ch ? baseColor(complement(ch)) : N_COLOR },
+            { y: top, color: ch ? baseColor(ch) : N_COLOR },
+            { y: bot, color: ch ? baseColor(complement(ch)) : N_COLOR },
           ];
           for (const s of strands) {
-            if (wakeParticles.length >= WAKE_MAX) wakeParticles.shift();
-            wakeParticles.push({
-              x: x + (Math.random() - 0.5) * 3,
-              y: s.y + (Math.random() - 0.5) * 2,
-              vx: -(Math.random() * 0.35 + 0.2),
-              vy: s.vy,
-              r: Math.random() * 0.9 + 0.55,
-              life: Math.random() * 1.2 + 1.8,
-              decay: Math.random() * 0.00007 + 0.000035,
-              wobble: Math.random() * Math.PI * 2,
-              color: s.color,
-            });
+            spawnWakeParticle(
+              x + (Math.random() - 0.5) * 3,
+              s.y + (Math.random() - 0.5) * 2,
+              s.color,
+              midY,
+            );
           }
         }
       }
@@ -664,22 +688,28 @@
       function drawWake(dt, cursorX) {
         ctx.save();
         clipLeftOfCursor(cursorX);
+        const dragPow = dt / 16.67;
         for (let i = wakeParticles.length - 1; i >= 0; i--) {
           const p = wakeParticles[i];
-          p.x += p.vx;
-          p.y += p.vy + Math.sin(driftT * 2.4 + p.wobble) * 0.015;
-          p.vx *= 0.998;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt + Math.sin(driftT * 2.4 + p.wobble) * 0.0009 * dt;
+          const drag = Math.pow(p.drag ?? 0.966, dragPow);
+          const vyDrag = Math.pow(p.vyDrag ?? 0.944, dragPow);
+          p.vx *= drag;
+          p.vy *= vyDrag;
           p.life -= p.decay * dt;
           if (p.life <= 0 || p.x < -12 || p.x > cursorX + 0.5 || p.y < -12 || p.y > H + 12) {
             wakeParticles.splice(i, 1);
             continue;
           }
-          const a = Math.min(1, p.life * 1.5);
-          ctx.fillStyle = rgba(p.color, a * 0.88);
+          const fade = p.life / (p.life0 || 1);
+          ctx.globalAlpha = fade * 0.28;
+          ctx.fillStyle = p.color;
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
           ctx.fill();
         }
+        ctx.globalAlpha = 1;
         ctx.restore();
       }
 
@@ -692,22 +722,12 @@
           const bi = k - M.bufStart;
           const ch = bi >= 0 && bi < M.bases.length ? M.bases[bi] : null;
           if (!ch) continue;
-          const color = baseColor(ch);
-          const bursts = Math.random() < 0.35 ? [-1, 1] : [Math.random() < 0.5 ? -1 : 1];
-          for (const sign of bursts) {
-            if (wakeParticles.length >= WAKE_MAX) wakeParticles.shift();
-            wakeParticles.push({
-              x: x + (Math.random() - 0.5) * 4,
-              y: midY + (Math.random() - 0.5) * 3,
-              vx: -(Math.random() * 0.35 + 0.18),
-              vy: sign * (Math.random() * 0.14 + 0.06),
-              r: Math.random() * 0.9 + 0.55,
-              life: Math.random() * 1.2 + 1.8,
-              decay: Math.random() * 0.00007 + 0.000035,
-              wobble: Math.random() * Math.PI * 2,
-              color,
-            });
-          }
+          spawnWakeParticle(
+            x + (Math.random() - 0.5) * 4,
+            midY + (Math.random() - 0.5) * 3,
+            baseColor(ch),
+            midY,
+          );
         }
       }
 
@@ -774,18 +794,17 @@
         ctx.moveTo(x, top);
         ctx.lineTo(x, bot);
         ctx.stroke();
+        ctx.restore();
 
-        ctx.fillStyle = rgba(c1, 0.72);
+        ctx.fillStyle = c1;
         ctx.beginPath();
         ctx.arc(x, top, BASE_DOT, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = rgba(c2, 0.72);
+        ctx.fillStyle = c2;
         ctx.beginPath();
         ctx.arc(x, bot, BASE_DOT, 0, Math.PI * 2);
         ctx.fill();
-
-        ctx.restore();
       }
 
       let lastFrame = performance.now();
@@ -805,7 +824,7 @@
         const midY = H / 2;
         const t = targetIndex();
 
-        drawParticles(midY, dt, cursorX);
+        drawParticles(midY, dt);
 
         const leftIdx = Math.floor(t - cursorX / CELL) - 1;
         const rightIdx = Math.ceil(t + (W - cursorX) / CELL) + 1;
