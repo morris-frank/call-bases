@@ -233,7 +233,6 @@
       "use strict";
 
       const COLORS = { A: "#74b27f", C: "#57add1", G: "#ce9360", T: "#D78A7A" };
-      const BASE_COLOR_MIX_PCT = 85;
       const COMP = { A: "T", T: "A", C: "G", G: "C" };
       const N_COLOR = "#51463E";
       const baseColor = (ch) => COLORS[ch] || N_COLOR;
@@ -498,10 +497,6 @@
 
       function colorMix(bg, fg, fgPct) {
         return `color-mix(in oklab, ${bg} ${100 - fgPct}%, ${fg} ${fgPct}%)`;
-      }
-
-      for (const k of Object.keys(COLORS)) {
-        COLORS[k] = colorMix(BG_COLOR, COLORS[k], BASE_COLOR_MIX_PCT);
       }
 
       function hash01(k) {
