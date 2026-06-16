@@ -435,6 +435,264 @@
       const SLOW_PLAYBACK_RATE = 12;
       let slowMode = false;
 
+      // Slow-mode soundscape: n-gram context drives layered water-drop synthesis.
+      let audioCtx = null;
+      let slowMaster = null;
+      let noiseBuffer = null;
+      let dropSoundIndex = -1;
+      let scape = null;
+      let lastScapeTri = "";
+
+      const DROP_GAIN = 0.011;
+      const BASE_PROFILES = {
+        A: { f0: 940, f1: 410, dur: 0.07 },
+        C: { f0: 810, f1: 340, dur: 0.075 },
+        G: { f0: 680, f1: 280, dur: 0.08 },
+        T: { f0: 560, f1: 230, dur: 0.085 },
+      };
+      const HARM_RATIOS = [1.25, 1.333, 1.5, 1.618, 2, 2.5, 3];
+      const OSC_TYPES = ["sine", "triangle"];
+
+      function hashStr(s) {
+        let h = 2166136261;
+        for (let i = 0; i < s.length; i++) {
+          h ^= s.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+        }
+        return h >>> 0;
+      }
+
+      function u01(h, salt) {
+        return ((h ^ salt) >>> 0) / 4294967295;
+      }
+
+      function baseAt(absIndex) {
+        const bi = absIndex - M.bufStart;
+        if (bi < 0 || bi >= M.bases.length) return null;
+        const ch = M.bases[bi];
+        return BASE_PROFILES[ch] ? ch : null;
+      }
+
+      function ngramEndingAt(absIndex, n) {
+        let s = "";
+        for (let k = absIndex - n + 1; k <= absIndex; k++) {
+          const ch = baseAt(k);
+          if (!ch) break;
+          s += ch;
+        }
+        return s || null;
+      }
+
+      function makeNoiseBuffer(ctx, seconds) {
+        const n = Math.ceil(ctx.sampleRate * seconds);
+        const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < n; i++) data[i] = Math.random() * 2 - 1;
+        return buf;
+      }
+
+      function ensureAudioCtx() {
+        if (audioCtx) {
+          if (audioCtx.state === "suspended") audioCtx.resume();
+          return audioCtx;
+        }
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        audioCtx = new Ctx();
+        slowMaster = audioCtx.createGain();
+        slowMaster.gain.value = 1;
+        slowMaster.connect(audioCtx.destination);
+        noiseBuffer = makeNoiseBuffer(audioCtx, 0.09);
+        return audioCtx;
+      }
+
+      function ensureScape() {
+        if (scape || !audioCtx || !slowMaster) return;
+        const osc = audioCtx.createOscillator();
+        const filter = audioCtx.createBiquadFilter();
+        const gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = 72;
+        filter.type = "lowpass";
+        filter.frequency.value = 220;
+        filter.Q.value = 0.7;
+        gain.gain.value = 0;
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(slowMaster);
+        osc.start();
+        scape = { osc, filter, gain };
+      }
+
+      function setSlowAudioActive(active) {
+        if (!audioCtx || !slowMaster) return;
+        const now = audioCtx.currentTime;
+        slowMaster.gain.setTargetAtTime(active ? 1 : 0, now, active ? 0.02 : 0.12);
+        if (scape) scape.gain.gain.setTargetAtTime(active ? 0.0022 : 0, now, active ? 0.4 : 0.15);
+      }
+
+      function updateScape(absIndex) {
+        if (!scape) return;
+        const tri = ngramEndingAt(absIndex, 3);
+        if (!tri || tri === lastScapeTri) return;
+        lastScapeTri = tri;
+        const h = hashStr(tri);
+        const now = audioCtx.currentTime;
+        const gc = (tri.match(/[GC]/g) || []).length;
+        const at = (tri.match(/[AT]/g) || []).length;
+        const root = 52 + u01(h, 80) * 88 + gc * 6 - at * 3;
+        scape.osc.frequency.setTargetAtTime(root, now, 0.42);
+        scape.filter.frequency.setTargetAtTime(110 + u01(h, 81) * 520 + gc * 40, now, 0.42);
+        scape.filter.Q.setTargetAtTime(0.4 + u01(h, 82) * 2.2, now, 0.5);
+        scape.gain.gain.setTargetAtTime(0.0014 + u01(h, 83) * 0.0028, now, 0.55);
+      }
+
+      function scheduleDropVoice(dest, now, offset, f0, f1, dur, peak, type, filterHz, filterQ) {
+        const t0 = now + offset;
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(1e-4, t0);
+        gain.gain.exponentialRampToValueAtTime(Math.max(1e-4, peak), t0 + 0.003);
+        gain.gain.exponentialRampToValueAtTime(1e-4, t0 + dur);
+
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.setValueAtTime(filterHz, t0);
+        filter.frequency.exponentialRampToValueAtTime(Math.max(40, filterHz * 0.35), t0 + dur * 0.92);
+        filter.Q.value = filterQ;
+
+        const osc = audioCtx.createOscillator();
+        osc.type = type;
+        osc.frequency.setValueAtTime(f0, t0);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur * 0.88);
+
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(dest);
+        osc.start(t0);
+        osc.stop(t0 + dur + 0.02);
+      }
+
+      function scheduleNoiseSplash(dest, now, offset, dur, peak, filterHz) {
+        if (!noiseBuffer || peak <= 1e-4) return;
+        const t0 = now + offset;
+        const src = audioCtx.createBufferSource();
+        src.buffer = noiseBuffer;
+
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = "bandpass";
+        filter.frequency.value = filterHz;
+        filter.Q.value = 1.4 + u01(filterHz | 0, 3) * 2;
+
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(1e-4, t0);
+        gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.001);
+        gain.gain.exponentialRampToValueAtTime(1e-4, t0 + dur);
+
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(dest);
+        src.start(t0);
+        src.stop(t0 + dur + 0.01);
+      }
+
+      function playDropAtIndex(absIndex) {
+        const uni = baseAt(absIndex);
+        if (!uni || !audioCtx || !slowMaster) return;
+
+        const bi = ngramEndingAt(absIndex, 2) || uni;
+        const tri = ngramEndingAt(absIndex, 3) || bi;
+        const hTri = hashStr(tri);
+        const hBi = hashStr(bi);
+        const hUni = hashStr(uni);
+        const profile = BASE_PROFILES[uni];
+        const now = audioCtx.currentTime;
+
+        const panner = audioCtx.createStereoPanner();
+        panner.pan.value = (u01(hBi, 20) - 0.5) * 0.72;
+        panner.connect(slowMaster);
+
+        const gc = (tri.match(/[GC]/g) || []).length;
+        const eventGain = DROP_GAIN * (0.68 + u01(hTri, 10) * 0.58);
+        const durMul = 0.78 + u01(hTri, 11) * 0.48 + gc * 0.04;
+        const dur = profile.dur * durMul;
+        const pitchMul = 0.86 + u01(hTri, 30) * 0.32;
+        const f0 = profile.f0 * pitchMul;
+        const f1 = Math.max(20, profile.f1 * (0.88 + u01(hTri, 31) * 0.24));
+        const filterHz = 320 + u01(hTri, 50) * 3600 + gc * 180;
+        const filterQ = 0.45 + u01(hTri, 51) * 4.5;
+        const typeMain = OSC_TYPES[Math.floor(u01(hTri, 40) * OSC_TYPES.length)];
+
+        scheduleDropVoice(
+          panner, now, 0, f0, f1, dur, eventGain, typeMain, filterHz, filterQ,
+        );
+
+        const harmRatio = HARM_RATIOS[Math.floor(u01(hTri, 41) * HARM_RATIOS.length)];
+        const harmPeak = eventGain * (0.12 + u01(hTri, 42) * 0.38);
+        if (harmPeak > 0.0012) {
+          scheduleDropVoice(
+            panner,
+            now,
+            0.004 + u01(hBi, 43) * 0.012,
+            f0 * harmRatio,
+            f1 * harmRatio,
+            dur * (0.82 + u01(hTri, 44) * 0.28),
+            harmPeak,
+            u01(hTri, 45) > 0.5 ? "triangle" : "sine",
+            filterHz * 1.15,
+            filterQ * 0.65,
+          );
+        }
+
+        const rippleAmt = u01(hBi, 61);
+        if (rippleAmt > 0.38 && bi.length >= 2) {
+          const echoRatio = 0.5 + u01(hBi, 62) * 0.55;
+          scheduleDropVoice(
+            panner,
+            now,
+            0.014 + u01(hBi, 60) * 0.048,
+            f0 * echoRatio,
+            f1 * echoRatio,
+            dur * 0.72,
+            eventGain * rippleAmt * 0.28,
+            "sine",
+            filterHz * 0.7,
+            0.8,
+          );
+        }
+
+        const splashPeak = eventGain * (0.08 + u01(hTri, 70) * 0.22) * (0.75 + gc * 0.18);
+        scheduleNoiseSplash(
+          panner,
+          now,
+          u01(hUni, 71) * 0.006,
+          0.028 + u01(hTri, 72) * 0.04,
+          splashPeak,
+          900 + u01(hTri, 73) * 2800,
+        );
+
+        updateScape(absIndex);
+      }
+
+      function syncDropSoundIndex() {
+        dropSoundIndex = playheadIndex();
+        lastScapeTri = "";
+      }
+
+      function tickSlowDrops() {
+        if (!slowMode || !audioCtx) return;
+        const idx = playheadIndex();
+        if (idx <= dropSoundIndex) return;
+        let i = dropSoundIndex + 1;
+        let played = 0;
+        while (i <= idx && played < 4) {
+          if (baseAt(i)) playDropAtIndex(i);
+          i++;
+          played++;
+        }
+        dropSoundIndex = i - 1;
+        updateScape(idx);
+      }
+
       function playbackRate() {
         if (slowMode) return SLOW_PLAYBACK_RATE;
         return pace.emaRate > 0 ? pace.emaRate : M.rate;
@@ -605,6 +863,7 @@
             M.complete = false;
             resetBuffer(msg.tailStart, msg.tail, msg.index);
             resetPace(msg.index, msg.rate);
+            syncDropSoundIndex();
             updateRateLabel();
             el.hoverHint.textContent = M.pileup ? "hover the now-line for the pile-up" : "";
             if (M.attractionsEnabled) {
@@ -824,6 +1083,14 @@
 
       el.rateRow.addEventListener("click", () => {
         slowMode = !slowMode;
+        if (slowMode) {
+          ensureAudioCtx();
+          ensureScape();
+          syncDropSoundIndex();
+          setSlowAudioActive(true);
+        } else {
+          setSlowAudioActive(false);
+        }
         updateRateLabel();
       });
 
@@ -1135,12 +1402,11 @@
         if (!M.n) return;
 
         advanceDisplay(dt);
+        tickSlowDrops();
 
         const cursorX = cursorXPos();
         const midY = H / 2;
         const t = targetIndex();
-
-        drawParticles(midY, dt);
 
         const leftIdx = Math.floor(t - cursorX / CELL) - 1;
         const rightIdx = Math.ceil(t + (W - cursorX) / CELL) + 1;
@@ -1153,6 +1419,8 @@
 
         ctx.save();
         clipLeftOfCursor(cursorX);
+        drawParticles(midY, dt);
+        drawWake(dt, cursorX);
 
         if (view === "helix") {
           emitWake(from, to, t, cursorX, midY, dt);
@@ -1165,8 +1433,6 @@
           drawCharList(from, to, t, cursorX, midY);
         }
         ctx.restore();
-
-        drawWake(dt, cursorX);
 
         ctx.strokeStyle = cursorStrokeColor();
         ctx.lineWidth = 2;
