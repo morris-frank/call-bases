@@ -89,7 +89,7 @@
 
     #hud-top-right:hover .pct-reveal {
       opacity: 1;
-      max-height: 2em;
+      max-height: 6em;
     }
 
     #hud-top-right .pct-reveal b {
@@ -371,7 +371,11 @@
       </span>
       <div id="rateText"></div>
     </div>
-    <div class="pct-reveal"><b id="pct">0.000%</b> revealed</div>
+    <div class="pct-reveal">
+      <div><b id="pct">0.000%</b> revealed</div>
+      <div id="pctStart"></div>
+      <div id="pctEnd"></div>
+    </div>
   </div>
   <div id="hud">
     <div class="hint"
@@ -397,6 +401,8 @@
         ctg: document.getElementById("ctg"),
         pos: document.getElementById("pos"),
         pct: document.getElementById("pct"),
+        pctStart: document.getElementById("pctStart"),
+        pctEnd: document.getElementById("pctEnd"),
         rate: document.getElementById("rateText"),
         rateRow: document.getElementById("rateRow"),
         hoverHint: document.getElementById("hoverHint"),
@@ -865,6 +871,7 @@
             resetPace(msg.index, msg.rate);
             syncDropSoundIndex();
             updateRateLabel();
+            updatePctSchedule();
             el.hoverHint.textContent = M.pileup ? "hover the now-line for the pile-up" : "";
             if (M.attractionsEnabled) {
               setAttraction(M.attractions.length ? M.attractions[M.attractions.length - 1] : null);
@@ -908,6 +915,30 @@
         if (r >= 1000) return (r / 1000).toFixed(2) + " kb/s";
         if (r >= 1) return r.toFixed(1) + " b/s";
         return r.toFixed(3) + " b/s";
+      }
+
+      function formatEpoch(sec) {
+        if (!Number.isFinite(sec)) return "—";
+        return new Date(sec * 1000).toLocaleString("en-GB", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+          timeZone: "UTC",
+          timeZoneName: "short",
+        });
+      }
+
+      function updatePctSchedule() {
+        if (!M.startEpoch || !M.n || !M.rate) {
+          el.pctStart.textContent = "";
+          el.pctEnd.textContent = "";
+          return;
+        }
+        el.pctStart.textContent = "started " + formatEpoch(M.startEpoch);
+        el.pctEnd.textContent = "ends " + formatEpoch(M.startEpoch + M.n / M.rate);
       }
 
       // --- view mode ---------------------------------------------------------
