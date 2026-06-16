@@ -458,18 +458,58 @@
       };
       const HARM_RATIOS = [1.25, 1.333, 1.5, 1.618, 2, 2.5, 3];
       const OSC_TYPES = ["sine", "triangle"];
-
-      function hashStr(s) {
-        let h = 2166136261;
-        for (let i = 0; i < s.length; i++) {
-          h ^= s.charCodeAt(i);
-          h = Math.imul(h, 16777619);
-        }
-        return h >>> 0;
-      }
+      // Per-base sound vectors; n-grams mix these so Hamming-neighbors sound alike.
+      const SOUND_BASIS = {
+        A: {
+          gain: 0.62, dur: 0.22, pitch: 0.72, f1: 0.68, filter: 0.78, filterQ: 0.38, tone: 0.82,
+          pan: 0.68, ripple: 0.52, echo: 0.58, splash: 0.48, splashF: 0.72,
+          scapeRoot: 0.78, scapeFilter: 0.68, scapeQ: 0.42, scapeGain: 0.56,
+        },
+        C: {
+          gain: 0.52, dur: 0.42, pitch: 0.56, f1: 0.54, filter: 0.56, filterQ: 0.52, tone: 0.58,
+          pan: 0.54, ripple: 0.46, echo: 0.5, splash: 0.42, splashF: 0.54,
+          scapeRoot: 0.58, scapeFilter: 0.5, scapeQ: 0.48, scapeGain: 0.48,
+        },
+        G: {
+          gain: 0.58, dur: 0.58, pitch: 0.42, f1: 0.4, filter: 0.4, filterQ: 0.66, tone: 0.4,
+          pan: 0.46, ripple: 0.5, echo: 0.46, splash: 0.72, splashF: 0.46,
+          scapeRoot: 0.44, scapeFilter: 0.58, scapeQ: 0.58, scapeGain: 0.54,
+        },
+        T: {
+          gain: 0.44, dur: 0.68, pitch: 0.28, f1: 0.32, filter: 0.24, filterQ: 0.3, tone: 0.24,
+          pan: 0.32, ripple: 0.38, echo: 0.4, splash: 0.32, splashF: 0.28,
+          scapeRoot: 0.28, scapeFilter: 0.32, scapeQ: 0.34, scapeGain: 0.38,
+        },
+      };
+      const TRI_POS_W = [0.45, 0.72, 1.0];
+      const BI_POS_W = [0.62, 1.0];
 
       function u01(h, salt) {
         return ((h ^ salt) >>> 0) / 4294967295;
+      }
+
+      function ngramBasisMix(s, posWeights) {
+        const keys = Object.keys(SOUND_BASIS.A);
+        const out = {};
+        for (const k of keys) out[k] = 0;
+        let wSum = 0;
+        const offset = posWeights.length - s.length;
+        for (let i = 0; i < s.length; i++) {
+          const b = SOUND_BASIS[s[i]];
+          if (!b) continue;
+          const w = posWeights[offset + i];
+          wSum += w;
+          for (const k of keys) out[k] += b[k] * w;
+        }
+        if (wSum > 0) {
+          for (const k of keys) out[k] /= wSum;
+        }
+        return out;
+      }
+
+      function basisPick01(mix, salt) {
+        const x = mix.tone * 0.61 + mix.filterQ * 0.39 + salt * 1e-4;
+        return x - Math.floor(x);
       }
 
       function baseAt(absIndex) {
@@ -542,15 +582,12 @@
         const tri = ngramEndingAt(absIndex, 3);
         if (!tri || tri === lastScapeTri) return;
         lastScapeTri = tri;
-        const h = hashStr(tri);
+        const mix = ngramBasisMix(tri, TRI_POS_W);
         const now = audioCtx.currentTime;
-        const gc = (tri.match(/[GC]/g) || []).length;
-        const at = (tri.match(/[AT]/g) || []).length;
-        const root = 52 + u01(h, 80) * 88 + gc * 6 - at * 3;
-        scape.osc.frequency.setTargetAtTime(root, now, 0.42);
-        scape.filter.frequency.setTargetAtTime(110 + u01(h, 81) * 520 + gc * 40, now, 0.42);
-        scape.filter.Q.setTargetAtTime(0.4 + u01(h, 82) * 2.2, now, 0.5);
-        scape.gain.gain.setTargetAtTime(0.0014 + u01(h, 83) * 0.0028, now, 0.55);
+        scape.osc.frequency.setTargetAtTime(52 + mix.scapeRoot * 88, now, 0.42);
+        scape.filter.frequency.setTargetAtTime(110 + mix.scapeFilter * 520, now, 0.42);
+        scape.filter.Q.setTargetAtTime(0.4 + mix.scapeQ * 2.2, now, 0.5);
+        scape.gain.gain.setTargetAtTime(0.0014 + mix.scapeGain * 0.0028, now, 0.55);
       }
 
       function scheduleDropVoice(dest, now, offset, f0, f1, dur, peak, type, filterHz, filterQ) {
@@ -607,73 +644,69 @@
 
         const bi = ngramEndingAt(absIndex, 2) || uni;
         const tri = ngramEndingAt(absIndex, 3) || bi;
-        const hTri = hashStr(tri);
-        const hBi = hashStr(bi);
-        const hUni = hashStr(uni);
+        const triMix = ngramBasisMix(tri, TRI_POS_W);
+        const biMix = ngramBasisMix(bi, BI_POS_W);
+        const uniMix = SOUND_BASIS[uni];
         const profile = BASE_PROFILES[uni];
         const now = audioCtx.currentTime;
 
         const panner = audioCtx.createStereoPanner();
-        panner.pan.value = (u01(hBi, 20) - 0.5) * 0.72;
+        panner.pan.value = (biMix.pan - 0.5) * 0.72;
         panner.connect(slowMaster);
 
-        const gc = (tri.match(/[GC]/g) || []).length;
-        const eventGain = DROP_GAIN * (0.68 + u01(hTri, 10) * 0.58);
-        const durMul = 0.78 + u01(hTri, 11) * 0.48 + gc * 0.04;
-        const dur = profile.dur * durMul;
-        const pitchMul = 0.86 + u01(hTri, 30) * 0.32;
-        const f0 = profile.f0 * pitchMul;
-        const f1 = Math.max(20, profile.f1 * (0.88 + u01(hTri, 31) * 0.24));
-        const filterHz = 320 + u01(hTri, 50) * 3600 + gc * 180;
-        const filterQ = 0.45 + u01(hTri, 51) * 4.5;
-        const typeMain = OSC_TYPES[Math.floor(u01(hTri, 40) * OSC_TYPES.length)];
+        const eventGain = DROP_GAIN * (0.68 + triMix.gain * 0.58);
+        const dur = profile.dur * (0.78 + triMix.dur * 0.48);
+        const f0 = profile.f0 * (0.86 + triMix.pitch * 0.32);
+        const f1 = Math.max(20, profile.f1 * (0.88 + triMix.f1 * 0.24));
+        const filterHz = 320 + triMix.filter * 3600;
+        const filterQ = 0.45 + triMix.filterQ * 4.5;
+        const typeMain = OSC_TYPES[Math.floor(basisPick01(triMix, 40) * OSC_TYPES.length)];
 
         scheduleDropVoice(
           panner, now, 0, f0, f1, dur, eventGain, typeMain, filterHz, filterQ,
         );
 
-        const harmRatio = HARM_RATIOS[Math.floor(u01(hTri, 41) * HARM_RATIOS.length)];
-        const harmPeak = eventGain * (0.12 + u01(hTri, 42) * 0.38);
+        const harmRatio = HARM_RATIOS[Math.floor(basisPick01(triMix, 41) * HARM_RATIOS.length)];
+        const harmPeak = eventGain * (0.12 + triMix.tone * 0.38);
         if (harmPeak > 0.0012) {
           scheduleDropVoice(
             panner,
             now,
-            0.004 + u01(hBi, 43) * 0.012,
+            0.004 + biMix.ripple * 0.012,
             f0 * harmRatio,
             f1 * harmRatio,
-            dur * (0.82 + u01(hTri, 44) * 0.28),
+            dur * (0.82 + triMix.dur * 0.28),
             harmPeak,
-            u01(hTri, 45) > 0.5 ? "triangle" : "sine",
+            basisPick01(triMix, 45) > 0.5 ? "triangle" : "sine",
             filterHz * 1.15,
             filterQ * 0.65,
           );
         }
 
-        const rippleAmt = u01(hBi, 61);
-        if (rippleAmt > 0.38 && bi.length >= 2) {
-          const echoRatio = 0.5 + u01(hBi, 62) * 0.55;
+        if (biMix.ripple > 0.38 && bi.length >= 2) {
+          const echoRatio = 0.5 + biMix.echo * 0.55;
           scheduleDropVoice(
             panner,
             now,
-            0.014 + u01(hBi, 60) * 0.048,
+            0.014 + biMix.pan * 0.048,
             f0 * echoRatio,
             f1 * echoRatio,
             dur * 0.72,
-            eventGain * rippleAmt * 0.28,
+            eventGain * biMix.ripple * 0.28,
             "sine",
             filterHz * 0.7,
             0.8,
           );
         }
 
-        const splashPeak = eventGain * (0.08 + u01(hTri, 70) * 0.22) * (0.75 + gc * 0.18);
+        const splashPeak = eventGain * (0.08 + triMix.splash * 0.22);
         scheduleNoiseSplash(
           panner,
           now,
-          u01(hUni, 71) * 0.006,
-          0.028 + u01(hTri, 72) * 0.04,
+          uniMix.tone * 0.006,
+          0.028 + triMix.dur * 0.04,
           splashPeak,
-          900 + u01(hTri, 73) * 2800,
+          900 + triMix.splashF * 2800,
         );
 
         updateScape(absIndex);
