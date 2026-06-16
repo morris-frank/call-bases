@@ -941,7 +941,16 @@
       }
 
       document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") connect();
+        if (document.visibilityState === "visible") {
+          connect();
+          if (slowMode) {
+            ensureAudioCtx();
+            syncDropSoundIndex();
+            setSlowAudioActive(true);
+          }
+        } else {
+          setSlowAudioActive(false);
+        }
       });
 
       function formatRate(r) {
