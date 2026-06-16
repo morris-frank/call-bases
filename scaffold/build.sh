@@ -16,7 +16,7 @@
 # are fetched from ENA using md5 tags embedded in the CRAM header.
 set -euo pipefail
 
-CRAM="NG1C7TA6N7.mm2.sortdup.bqsr.cram"
+CRAM=""
 REF=""
 OUT="artifacts"
 RATE=""
@@ -46,6 +46,7 @@ FAI="${CRAM}.reference.fai"
 CONSENSUS="${CRAM}.consensus.fa"
 
 command -v samtools >/dev/null || { echo "samtools not found on PATH" >&2; exit 1; }
+[[ -n "$CRAM" ]] || { echo "--cram required" >&2; exit 2; }
 [[ -f "$CRAM" ]] || { echo "CRAM not found: $CRAM" >&2; exit 1; }
 
 export REF_CACHE="${REF_CACHE:-$HOME/.cache/hts-ref/%2s/%2s/%s}"

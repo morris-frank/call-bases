@@ -416,7 +416,6 @@
         bases: "",
         maxRevealed: 0,
         complete: false,
-        serverSkewMs: 0,
         attractionsEnabled: false,
         attractions: [],
         currentAttraction: null,
@@ -608,12 +607,17 @@
             resetPace(msg.index, msg.rate);
             updateRateLabel();
             el.hoverHint.textContent = M.pileup ? "hover the now-line for the pile-up" : "";
-            setAttraction(M.attractions.length ? M.attractions[M.attractions.length - 1] : null);
+            if (M.attractionsEnabled) {
+              setAttraction(M.attractions.length ? M.attractions[M.attractions.length - 1] : null);
+            } else {
+              setAttraction(null);
+            }
           } else if (msg.type === "tick") {
             appendBases(M.maxRevealed, msg.bases);
             M.maxRevealed = Math.max(M.maxRevealed, msg.index);
             noteTick(msg.index);
           } else if (msg.type === "attraction") {
+            if (!M.attractionsEnabled) return;
             M.attractions.push(msg.attraction);
             if (M.attractions.length > 12) M.attractions.splice(0, M.attractions.length - 12);
             setAttraction(msg.attraction);
@@ -709,7 +713,7 @@
       const WAKE_MAX = 700;
       const WAKE_SPEED_EXIT = 0.52;
       const WAKE_SPEED_DONE = 0.04;
-      const PARTICLE_CAP = 180;
+      const PARTICLE_CAP = 100;
       const GRAY_BUCKETS = 12;
 
       function colorMix(bg, fg, fgPct) {

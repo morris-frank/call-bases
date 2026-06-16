@@ -1,94 +1,32 @@
+# inputs and indexes
 *cram
 *crai
-out/
-*tsv
 *fai
+*tsv
+out/
 
-**/.claude/settings.local.json
-
-# call-bases build artifacts (large, generated offline) and local config
+# build artifacts (large, generated offline)
 artifacts/
 *.bin
 *.idx
 consensus.fa
+
+# local config
 server/config.json
 
-# General
-.DS_Store
-.localized
-__MACOSX/
-.AppleDouble
-.LSOverride
+# editor / tooling
+**/.claude/settings.local.json
 
-# Resource forks
+# macOS
+.DS_Store
+__MACOSX/
 ._*
 
-# Files and directories that might appear in the root of a volume
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-.com.apple.timemachine.supported
-.PKInstallSandboxManager
-.PKInstallSandboxManager-SystemSoftware
-.hotfiles.btree
-.vol
-.file
-.disk_label*
-lost+found
-
-# TimeMachine
-Backups.backupdb
-.MobileBackups
-.MobileBackups.trash
-MobileBackups.trash
-tmbootpicker.efi
-
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
-*.py[codz]
-*$py.class
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-
-# pdm
-.pdm-python
-.pdm-build/
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Environments
-.env
-.venv
+*.py[cod]
+.venv/
 venv/
-env.bak/
-venv.bak/
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
+# secrets
+.env

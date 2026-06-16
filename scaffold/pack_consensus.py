@@ -62,6 +62,16 @@ def fit_to_length(seq: bytearray, length: int) -> bytearray:
     return seq
 
 
+def write_n_run(out, length: int, block_size: int = 1 << 20) -> None:
+    """Write `length` N bytes to out in block-sized chunks."""
+    block = b"N" * block_size
+    remaining = length
+    while remaining > 0:
+        w = min(remaining, len(block))
+        out.write(block[:w])
+        remaining -= w
+
+
 def sha256_file(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -101,13 +111,7 @@ def main(argv=None):
             name = order[idx]
             length = fai_len[name]
             contigs.append({"name": name, "start": total, "length": length})
-            # write N for an entirely uncovered contig in CHUNK-sized blocks
-            block = b"N" * (1 << 20)
-            remaining = length
-            while remaining > 0:
-                w = min(remaining, len(block))
-                out.write(block[:w])
-                remaining -= w
+            write_n_run(out, length)
             total += length
             idx += 1
 
@@ -129,12 +133,7 @@ def main(argv=None):
             name = order[idx]
             length = fai_len[name]
             contigs.append({"name": name, "start": total, "length": length})
-            block = b"N" * (1 << 20)
-            remaining = length
-            while remaining > 0:
-                w = min(remaining, len(block))
-                out.write(block[:w])
-                remaining -= w
+            write_n_run(out, length)
             total += length
             idx += 1
 
@@ -142,7 +141,6 @@ def main(argv=None):
         "version": 1,
         "n": total,
         "contigs": contigs,
-        "pileup": False,
         "source": {
             "cram": args.cram,
             "crai_sha256": sha256_file(args.crai) if args.crai else None,

@@ -43,30 +43,35 @@ function loadConfig() {
     attractionHistorySize: 8,
     attractionFetchTimeoutMs: 12000,
   };
-  const cfgPath = process.env.CALLBASES_CONFIG || path.join(process.cwd(), "config.json");
+  const cfgPath = process.env.CALLBASES_CONFIG || path.join(__dirname, "config.json");
   if (fs.existsSync(cfgPath)) {
     Object.assign(cfg, JSON.parse(fs.readFileSync(cfgPath, "utf8")));
   }
   const env = process.env;
-  if (env.CALLBASES_ARTIFACTS_DIR) cfg.artifactsDir = env.CALLBASES_ARTIFACTS_DIR;
-  if (env.CALLBASES_WEB_DIR) cfg.webDir = env.CALLBASES_WEB_DIR;
-  if (env.CALLBASES_LISTEN) cfg.listen = env.CALLBASES_LISTEN;
-  if (env.CALLBASES_START_EPOCH) cfg.startEpoch = env.CALLBASES_START_EPOCH;
-  if (env.CALLBASES_RATE) cfg.rate = Number(env.CALLBASES_RATE);
-  if (env.CALLBASES_RUNTIME_SECONDS) cfg.runtimeSeconds = Number(env.CALLBASES_RUNTIME_SECONDS);
-  if (env.CALLBASES_TAIL) cfg.tail = Number(env.CALLBASES_TAIL);
-  if (env.CALLBASES_TICK_MS) cfg.tickMs = Number(env.CALLBASES_TICK_MS);
-  if (env.CALLBASES_PILEUP) cfg.pileup = env.CALLBASES_PILEUP === "true";
-  if (env.CALLBASES_ATTRACTIONS) cfg.attractions = env.CALLBASES_ATTRACTIONS === "true";
-  if (env.CALLBASES_ATTRACTION_SPECIES) cfg.attractionSpecies = env.CALLBASES_ATTRACTION_SPECIES;
-  if (env.CALLBASES_ATTRACTION_ASSEMBLY) cfg.attractionAssembly = env.CALLBASES_ATTRACTION_ASSEMBLY;
-  if (env.CALLBASES_ATTRACTION_WINDOW_BASES) cfg.attractionWindowBases = Number(env.CALLBASES_ATTRACTION_WINDOW_BASES);
-  if (env.CALLBASES_ATTRACTION_DEAD_AIR_MS) cfg.attractionDeadAirMs = Number(env.CALLBASES_ATTRACTION_DEAD_AIR_MS);
-  if (env.CALLBASES_ATTRACTION_MIN_INTERVAL_MS) cfg.attractionMinIntervalMs = Number(env.CALLBASES_ATTRACTION_MIN_INTERVAL_MS);
-  if (env.CALLBASES_ATTRACTION_MAX_INTERVAL_MS) cfg.attractionMaxIntervalMs = Number(env.CALLBASES_ATTRACTION_MAX_INTERVAL_MS);
-  if (env.CALLBASES_ATTRACTION_CACHE_SIZE) cfg.attractionCacheSize = Number(env.CALLBASES_ATTRACTION_CACHE_SIZE);
-  if (env.CALLBASES_ATTRACTION_HISTORY_SIZE) cfg.attractionHistorySize = Number(env.CALLBASES_ATTRACTION_HISTORY_SIZE);
-  if (env.CALLBASES_ATTRACTION_FETCH_TIMEOUT_MS) cfg.attractionFetchTimeoutMs = Number(env.CALLBASES_ATTRACTION_FETCH_TIMEOUT_MS);
+  const ENV_MAP = [
+    ["CALLBASES_ARTIFACTS_DIR", "artifactsDir"],
+    ["CALLBASES_WEB_DIR", "webDir"],
+    ["CALLBASES_LISTEN", "listen"],
+    ["CALLBASES_START_EPOCH", "startEpoch"],
+    ["CALLBASES_RATE", "rate", Number],
+    ["CALLBASES_RUNTIME_SECONDS", "runtimeSeconds", Number],
+    ["CALLBASES_TAIL", "tail", Number],
+    ["CALLBASES_TICK_MS", "tickMs", Number],
+    ["CALLBASES_PILEUP", "pileup", (v) => v === "true"],
+    ["CALLBASES_ATTRACTIONS", "attractions", (v) => v === "true"],
+    ["CALLBASES_ATTRACTION_SPECIES", "attractionSpecies"],
+    ["CALLBASES_ATTRACTION_ASSEMBLY", "attractionAssembly"],
+    ["CALLBASES_ATTRACTION_WINDOW_BASES", "attractionWindowBases", Number],
+    ["CALLBASES_ATTRACTION_DEAD_AIR_MS", "attractionDeadAirMs", Number],
+    ["CALLBASES_ATTRACTION_MIN_INTERVAL_MS", "attractionMinIntervalMs", Number],
+    ["CALLBASES_ATTRACTION_MAX_INTERVAL_MS", "attractionMaxIntervalMs", Number],
+    ["CALLBASES_ATTRACTION_CACHE_SIZE", "attractionCacheSize", Number],
+    ["CALLBASES_ATTRACTION_HISTORY_SIZE", "attractionHistorySize", Number],
+    ["CALLBASES_ATTRACTION_FETCH_TIMEOUT_MS", "attractionFetchTimeoutMs", Number],
+  ];
+  for (const [envKey, cfgKey, parse] of ENV_MAP) {
+    if (env[envKey] != null) cfg[cfgKey] = parse ? parse(env[envKey]) : env[envKey];
+  }
   return cfg;
 }
 
@@ -94,7 +99,7 @@ function openState(cfg) {
   const pileupBinPath = path.join(dir, "pileup.bin");
   const pileupIdxPath = path.join(dir, "pileup.idx");
   const havePileup = fs.existsSync(pileupBinPath) && fs.existsSync(pileupIdxPath);
-  const pileupEnabled = cfg.pileup === false ? false : (cfg.pileup === true ? havePileup : havePileup);
+  const pileupEnabled = cfg.pileup !== false && havePileup;
   let pileupBinFd = null;
   let pileupIdxFd = null;
   if (pileupEnabled) {
@@ -218,7 +223,6 @@ function normalizeContigName(name) {
 
 function attractionWindowFor(st, pos) {
   const c = contigFor(st, pos);
-  if (!c) return null;
   const ctg = st.meta.contigs.find((x) => x.name === c.name);
   if (!ctg) return null;
   const seq = normalizeContigName(c.name);
@@ -270,12 +274,10 @@ function pushAttractionHistory(st, attraction) {
 
 function upsertCacheEntry(st, key, patch) {
   const tv = st.attractions;
-  const cur = tv.cache.get(key) || { key, attractions: [], cursor: 0, announced: false };
-  const next = Object.assign(cur, patch);
-  if (tv.cache.has(key)) tv.cache.delete(key);
-  tv.cache.set(key, next);
+  const cur = tv.cache.get(key) || { key, attractions: [], cursor: 0 };
+  tv.cache.set(key, Object.assign(cur, patch));
   pruneCache(st);
-  return next;
+  return tv.cache.get(key);
 }
 
 function attractionSourceScore(source, clinical) {
@@ -506,7 +508,7 @@ async function fetchAttractionsForWindow(st, region) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), tv.fetchTimeoutMs);
   tv.inflight = { key: region.key, controller: ac };
-  upsertCacheEntry(st, region.key, { status: "fetching", region, fetchedAt: Date.now() });
+  upsertCacheEntry(st, region.key, { status: "fetching", region });
   try {
     const overlapSpecies = tv.species === "homo_sapiens" ? "human" : tv.species;
     const [overlap, genePhenotypes, variantPhenotypes] = await Promise.all([
@@ -538,8 +540,6 @@ async function fetchAttractionsForWindow(st, region) {
       region,
       attractions,
       cursor: 0,
-      announced: false,
-      fetchedAt: Date.now(),
     });
   } catch (err) {
     if (err && err.name !== "AbortError") {
@@ -551,7 +551,6 @@ async function fetchAttractionsForWindow(st, region) {
       errorAt: Date.now(),
       attractions: [],
       cursor: 0,
-      announced: false,
     });
   } finally {
     clearTimeout(timer);
@@ -622,7 +621,6 @@ async function runAttractionLoop(st) {
         expiresAt: emittedAt + durationMs,
       });
       entry.cursor = (idx + 1) % entry.attractions.length;
-      entry.announced = true;
       tv.lastWindowKey = region.key;
       tv.nextEmitAt = attraction.expiresAt;
       pushAttractionHistory(st, attraction);
