@@ -136,13 +136,25 @@ function openState(cfg) {
   };
 }
 
+function ucscAssemblyFor(assembly) {
+  const asm = String(assembly || "GRCH38").toUpperCase();
+  if (asm === "GRCH37") {
+    return { genome: "hg19", track: "phastCons46way", label: "46 vertebrates" };
+  }
+  return { genome: "hg38", track: "phastCons100way", label: "100 vertebrates" };
+}
+
 function createAttractionState(cfg) {
   const assembly = String(cfg.attractionAssembly || "GRCh38").toUpperCase();
+  const ucsc = ucscAssemblyFor(assembly);
   const enabled = cfg.attractions !== false;
   return {
     enabled,
     species: cfg.attractionSpecies,
     assembly,
+    ucscGenome: ucsc.genome,
+    ucscConsTrack: ucsc.track,
+    ucscConsLabel: ucsc.label,
     windowBases: clampInt(cfg.attractionWindowBases, 1000, 5000000, 200000),
     deadAirMs: clampInt(cfg.attractionDeadAirMs, 0, 3600000, 30000),
     minIntervalMs: clampInt(cfg.attractionMinIntervalMs, 1000, 3600000, 12000),
@@ -382,13 +394,141 @@ function buildRegionUrl(st, region) {
   )}`;
 }
 
+function ucscChromName(contig) {
+  const v = String(contig || "").trim();
+  if (/^chr/i.test(v)) return v;
+  return `chr${v}`;
+}
+
+function buildUcscRegionUrl(st, region) {
+  const chrom = ucscChromName(region.contig);
+  return `https://genome.ucsc.edu/cgi-bin/hgTracks?db=${encodeURIComponent(
+    st.attractions.ucscGenome
+  )}&position=${encodeURIComponent(`${chrom}:${region.start}-${region.end}`)}`;
+}
+
 function decorateAttraction(st, attraction) {
+  if (attraction.url) return attraction;
   return Object.assign(attraction, {
     url: buildRegionUrl(st, attraction.region),
   });
 }
 
-function buildAttractions(st, region, genes, regulatory, genePhenotypes, variantPhenotypes) {
+const UCSC_API = "https://api.genome.ucsc.edu";
+const CONS_PROBE_COUNT = 8;
+const CONS_PROBE_SIZE = 2048;
+const CONS_HIGH = 0.9;
+
+function conservationProbesFor(region) {
+  const span = region.end - region.start + 1;
+  const probes = [];
+  for (let i = 0; i < CONS_PROBE_COUNT; i++) {
+    const center = region.start + Math.floor(((i + 0.5) / CONS_PROBE_COUNT) * span);
+    let start = Math.max(region.start, center - Math.floor(CONS_PROBE_SIZE / 2));
+    let end = Math.min(region.end, start + CONS_PROBE_SIZE - 1);
+    start = Math.max(region.start, end - CONS_PROBE_SIZE + 1);
+    probes.push({ start, end });
+  }
+  return probes;
+}
+
+function summarizeConservationValues(items) {
+  let sum = 0;
+  let high = 0;
+  let max = 0;
+  let n = 0;
+  for (const item of items) {
+    const len = item.end - item.start;
+    if (len <= 0) continue;
+    const v = Number(item.value);
+    if (!Number.isFinite(v)) continue;
+    sum += v * len;
+    n += len;
+    if (v >= CONS_HIGH) high += len;
+    if (v > max) max = v;
+  }
+  return {
+    bases: n,
+    mean: n ? sum / n : 0,
+    highFraction: n ? high / n : 0,
+    max,
+  };
+}
+
+function isConservationHotspot(summary) {
+  if (!summary || summary.bases <= 0) return false;
+  return (
+    summary.highFraction >= 0.08 ||
+    summary.mean >= 0.65 ||
+    (summary.max >= 0.99 && summary.highFraction >= 0.02)
+  );
+}
+
+function conservationPct(fraction) {
+  return `${Math.round(fraction * 1000) / 10}%`;
+}
+
+function buildConservationAttraction(st, region, summary) {
+  const label = st.attractions.ucscConsLabel;
+  const highPct = conservationPct(summary.highFraction);
+  const meanPct = conservationPct(summary.mean);
+  const maxPct = conservationPct(summary.max);
+  let detail;
+  if (summary.highFraction >= 0.12) {
+    detail = `This stretch is unusually preserved across ${label}—about ${highPct} of sampled bases sit in the top conservation tier—which usually means function matters here.`;
+  } else if (summary.mean >= 0.65) {
+    detail = `Conservation runs high here (mean ${meanPct} across ${label}), hinting that selection has held this sequence steady across species.`;
+  } else {
+    detail = `Highly conserved peaks (up to ${maxPct}) show up across ${label}, marking pockets where sequence change is rare and function likely matters.`;
+  }
+  const score = clampInt(
+    72 + summary.highFraction * 40 + summary.mean * 18 + summary.max * 6,
+    68,
+    88,
+    76
+  );
+  return {
+    id: `${region.key}:conservation:${highPct}:${meanPct}`,
+    windowKey: region.key,
+    category: "conservation",
+    score,
+    title: "conservation hotspot",
+    detail: compact(detail, 150),
+    source: "UCSC phastCons",
+    url: buildUcscRegionUrl(st, region),
+    region: { contig: region.contig, start: region.start, end: region.end },
+  };
+}
+
+async function fetchUcscConservationProbe(st, region, probe, signal) {
+  const tv = st.attractions;
+  const endpoint = new URL("/getData/track", UCSC_API);
+  endpoint.searchParams.set("genome", tv.ucscGenome);
+  endpoint.searchParams.set("track", tv.ucscConsTrack);
+  endpoint.searchParams.set("chrom", ucscChromName(region.contig));
+  endpoint.searchParams.set("start", String(probe.start - 1));
+  endpoint.searchParams.set("end", String(probe.end));
+  const res = await fetch(endpoint, {
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`ucsc ${res.status} for ${endpoint.pathname}`);
+  }
+  const data = await res.json();
+  return data[tv.ucscConsTrack] || [];
+}
+
+async function fetchConservationForWindow(st, region, signal) {
+  const probes = conservationProbesFor(region);
+  const chunks = await Promise.all(
+    probes.map((probe) => fetchUcscConservationProbe(st, region, probe, signal))
+  );
+  const summary = summarizeConservationValues(chunks.flat());
+  return isConservationHotspot(summary) ? summary : null;
+}
+
+function buildAttractions(st, region, genes, regulatory, genePhenotypes, variantPhenotypes, conservation) {
   const out = [];
   const overlappingGenes = genes.filter((g) => g.start <= region.end && g.end >= region.start);
   if (overlappingGenes.length) {
@@ -463,6 +603,10 @@ function buildAttractions(st, region, genes, regulatory, genePhenotypes, variant
     });
   }
 
+  if (conservation) {
+    out.push(buildConservationAttraction(st, region, conservation));
+  }
+
   if (!out.length) {
     out.push({
       id: `${region.key}:quiet`,
@@ -511,7 +655,13 @@ async function fetchAttractionsForWindow(st, region) {
   upsertCacheEntry(st, region.key, { status: "fetching", region });
   try {
     const overlapSpecies = tv.species === "homo_sapiens" ? "human" : tv.species;
-    const [overlap, genePhenotypes, variantPhenotypes] = await Promise.all([
+    const conservationPromise = fetchConservationForWindow(st, region, ac.signal).catch((err) => {
+      if (err && err.name !== "AbortError") {
+        console.error(`conservation fetch failed for ${region.key}: ${err.message}`);
+      }
+      return null;
+    });
+    const [overlap, genePhenotypes, variantPhenotypes, conservation] = await Promise.all([
       fetchJsonWithTimeout(
         st,
         `/overlap/region/${overlapSpecies}/${queryRegion}`,
@@ -530,11 +680,20 @@ async function fetchAttractionsForWindow(st, region) {
         [["feature_type", "Variation"]],
         ac.signal
       ),
+      conservationPromise,
     ]);
 
     const genes = overlap.filter((item) => item.feature_type === "gene");
     const regulatory = overlap.filter((item) => item.feature_type === "regulatory");
-    const attractions = buildAttractions(st, region, genes, regulatory, genePhenotypes, variantPhenotypes);
+    const attractions = buildAttractions(
+      st,
+      region,
+      genes,
+      regulatory,
+      genePhenotypes,
+      variantPhenotypes,
+      conservation
+    );
     upsertCacheEntry(st, region.key, {
       status: "ready",
       region,
