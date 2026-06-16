@@ -344,13 +344,87 @@ function compact(s, max) {
   return `${v.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
 }
 
-function countBy(list, keyFn) {
-  const out = new Map();
-  for (const item of list) {
-    const key = keyFn(item);
-    out.set(key, (out.get(key) || 0) + 1);
+
+const REGULATORY_CLASS = {
+  promoter_like: {
+    title: "promoter-like cCREs",
+    detail: "promoter-like signature",
+    score: 82,
+  },
+  enhancer_like: {
+    title: "enhancer-like cCREs",
+    detail: "proximal enhancer-like signature",
+    score: 78,
+  },
+  distal: {
+    title: "distal cCREs",
+    detail: "distal enhancer-like signature",
+    score: 74,
+  },
+  ctcf_bound: {
+    title: "CTCF-bound cCREs",
+    detail: "CTCF binding signature",
+    score: 72,
+  },
+};
+
+const CCRE_LABEL_TO_CLASS = {
+  PLS: "promoter_like",
+  pELS: "enhancer_like",
+  dELS: "distal",
+  "CTCF-only": "ctcf_bound",
+  "CTCF-bound": "ctcf_bound",
+};
+
+const ENSEMBL_REGULATORY_TO_CLASS = {
+  promoter: "promoter_like",
+  enhancer: "enhancer_like",
+  CTCF_binding_site: "ctcf_bound",
+  open_chromatin_region: "distal",
+};
+
+function classifyCcreElements(ccreItems) {
+  const counts = new Map();
+  for (const item of ccreItems) {
+    const labels = String(item.ccre || item.encodeLabel || "")
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    for (const label of labels) {
+      const cls = CCRE_LABEL_TO_CLASS[label];
+      if (cls) counts.set(cls, (counts.get(cls) || 0) + 1);
+    }
   }
-  return out;
+  return counts;
+}
+
+function classifyEnsemblRegulatory(regulatory) {
+  const counts = new Map();
+  for (const item of regulatory) {
+    const cls = ENSEMBL_REGULATORY_TO_CLASS[item.description];
+    if (cls) counts.set(cls, (counts.get(cls) || 0) + 1);
+  }
+  return counts;
+}
+
+function buildRegulatoryAttractions(st, region, classCounts, source) {
+  const out = [];
+  for (const [classKey, meta] of Object.entries(REGULATORY_CLASS)) {
+    const n = classCounts.get(classKey) || 0;
+    if (!n) continue;
+    out.push({
+      id: `${region.key}:reg:${classKey}:${n}`,
+      windowKey: region.key,
+      category: "regulation",
+      score: meta.score,
+      title: meta.title,
+      detail: compact(`${n} ${meta.detail}${n === 1 ? "" : "s"} overlap this window.`, 150),
+      source,
+      url: source === "ENCODE SCREEN cCRE" ? buildUcscRegionUrl(st, region) : undefined,
+      region: { contig: region.contig, start: region.start, end: region.end },
+    });
+  }
+  return out.sort((a, b) => b.score - a.score);
 }
 
 function topPhenotypeAttraction(region, records, kind) {
@@ -528,7 +602,7 @@ async function fetchConservationForWindow(st, region, signal) {
   return isConservationHotspot(summary) ? summary : null;
 }
 
-function buildAttractions(st, region, genes, regulatory, genePhenotypes, variantPhenotypes, conservation) {
+function buildAttractions(st, region, genes, regulatory, ccreItems, genePhenotypes, variantPhenotypes, conservation) {
   const out = [];
   const overlappingGenes = genes.filter((g) => g.start <= region.end && g.end >= region.start);
   if (overlappingGenes.length) {
@@ -584,23 +658,13 @@ function buildAttractions(st, region, genes, regulatory, genePhenotypes, variant
   const variantPhenotype = topPhenotypeAttraction(region, variantPhenotypes, "variant");
   if (variantPhenotype) out.push(variantPhenotype);
 
-  if (regulatory.length) {
-    const counts = countBy(regulatory, (r) => r.description || "regulatory feature");
-    const summary = Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 2)
-      .map(([label, n]) => `${n} ${label}${n === 1 ? "" : "s"}`)
-      .join(", ");
-    out.push({
-      id: `${region.key}:reg:${summary}`,
-      windowKey: region.key,
-      category: "regulation",
-      score: 70,
-      title: "regulatory scenery",
-      detail: compact(`${summary} overlap this window.`, 150),
-      source: "Ensembl regulation",
-      region: { contig: region.contig, start: region.start, end: region.end },
-    });
+  const ccreCounts = classifyCcreElements(ccreItems);
+  const regulatoryCounts = ccreCounts.size
+    ? ccreCounts
+    : classifyEnsemblRegulatory(regulatory);
+  if (regulatoryCounts.size) {
+    const source = ccreCounts.size ? "ENCODE SCREEN cCRE" : "Ensembl regulation";
+    out.push(...buildRegulatoryAttractions(st, region, regulatoryCounts, source));
   }
 
   if (conservation) {
@@ -646,6 +710,27 @@ async function fetchJsonWithTimeout(st, pathname, query, signal) {
   return res.json();
 }
 
+async function fetchCcreForWindow(st, region, signal) {
+  const tv = st.attractions;
+  if (tv.assembly !== "GRCH38") return [];
+  const endpoint = new URL("/getData/track", UCSC_API);
+  endpoint.searchParams.set("genome", tv.ucscGenome);
+  endpoint.searchParams.set("track", "encodeCcreCombined");
+  endpoint.searchParams.set("chrom", ucscChromName(region.contig));
+  endpoint.searchParams.set("start", String(region.start - 1));
+  endpoint.searchParams.set("end", String(region.end));
+  const res = await fetch(endpoint, {
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`ucsc ccre ${res.status} for ${region.key}`);
+  }
+  const data = await res.json();
+  if (data.error) return [];
+  return data.encodeCcreCombined || [];
+}
+
 async function fetchAttractionsForWindow(st, region) {
   const tv = st.attractions;
   const queryRegion = `${region.seqRegion}:${region.start}-${region.end}`;
@@ -661,7 +746,13 @@ async function fetchAttractionsForWindow(st, region) {
       }
       return null;
     });
-    const [overlap, genePhenotypes, variantPhenotypes, conservation] = await Promise.all([
+    const ccrePromise = fetchCcreForWindow(st, region, ac.signal).catch((err) => {
+      if (err && err.name !== "AbortError") {
+        console.error(`cCRE fetch failed for ${region.key}: ${err.message}`);
+      }
+      return [];
+    });
+    const [overlap, genePhenotypes, variantPhenotypes, conservation, ccreItems] = await Promise.all([
       fetchJsonWithTimeout(
         st,
         `/overlap/region/${overlapSpecies}/${queryRegion}`,
@@ -681,6 +772,7 @@ async function fetchAttractionsForWindow(st, region) {
         ac.signal
       ),
       conservationPromise,
+      ccrePromise,
     ]);
 
     const genes = overlap.filter((item) => item.feature_type === "gene");
@@ -690,6 +782,7 @@ async function fetchAttractionsForWindow(st, region) {
       region,
       genes,
       regulatory,
+      ccreItems,
       genePhenotypes,
       variantPhenotypes,
       conservation
