@@ -6,11 +6,15 @@
   <meta name="viewport"
         content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>maurice-frank</title>
+  <link id="favicon"
+        rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23F3EFEA'/%3E%3C/svg%3E">
   <style>
     :root {
       --bg: #F3EFEA;
       --fg: #2D2825;
       --dim: #8C7E72;
+      --mono-font: "BigBlueTerm437 Nerd Font", "BigBlueTermPlus Nerd Font", monospace;
     }
 
     * {
@@ -23,7 +27,7 @@
       height: 100%;
       background: var(--bg);
       color: var(--fg);
-      font-family: "Andale Mono", "Andale Mono WT", monospace;
+      font-family: var(--mono-font);
       text-transform: lowercase;
       overflow: hidden;
     }
@@ -389,6 +393,7 @@
       const COLORS = { A: "#74b27f", C: "#57add1", G: "#ce9360", T: "#D78A7A" };
       const COMP = { A: "T", T: "A", C: "G", G: "C" };
       const N_COLOR = "#51463E";
+      const PAGE_TITLE = document.title;
       const baseColor = (ch) => COLORS[ch] || N_COLOR;
       const complement = (ch) => COMP[ch] || "N";
       const lc = (s) => String(s).toLowerCase();
@@ -426,6 +431,7 @@
         attractions: [],
         currentAttraction: null,
         attractionProgress: 0,
+        streamLive: false,
       };
       const BUF_CAP = 60000;
 
@@ -787,6 +793,14 @@
         return Math.max(0, Math.min(Math.floor(pace.displayT), M.n - 1, M.maxRevealed - 1));
       }
 
+      function basesAround(absIndex, before, after) {
+        if (!M.bases.length) return "";
+        const start = Math.max(M.bufStart, absIndex - before);
+        const end = Math.min(M.bufStart + M.bases.length, absIndex + after + 1);
+        if (end <= start) return "";
+        return M.bases.slice(start - M.bufStart, end - M.bufStart);
+      }
+
       function appendBases(fromIndex, str) {
         if (!str) return;
         if (M.bases.length === 0) {
@@ -892,7 +906,9 @@
           es = null;
         }
         es = new EventSource("/stream");
+        es.onopen = () => { M.streamLive = true; };
         es.onmessage = (ev) => {
+          M.streamLive = true;
           const msg = JSON.parse(ev.data);
           if (msg.type === "hello") {
             M.n = msg.n; M.rate = msg.rate; M.startEpoch = msg.startEpoch;
@@ -922,11 +938,13 @@
             setAttraction(msg.attraction);
           } else if (msg.type === "complete") {
             M.complete = true;
+            M.streamLive = false;
             M.maxRevealed = M.n;
             noteTick(M.n);
           }
         };
         es.onerror = () => {
+          M.streamLive = false;
           if (es) {
             es.close();
             es = null;
@@ -983,6 +1001,91 @@
         el.pctEnd.textContent = "ends " + formatEpoch(M.startEpoch + M.n / M.rate);
       }
 
+      // --- browser chrome ----------------------------------------------------
+      const favicon = document.getElementById("favicon");
+      const defaultFaviconHref = favicon ? favicon.href : "";
+      const faviconCanvas = document.createElement("canvas");
+      faviconCanvas.width = 64;
+      faviconCanvas.height = 64;
+      const faviconCtx = faviconCanvas.getContext("2d");
+      let lastChromeUpdate = 0;
+      let lastTitleText = "";
+      let lastFaviconKey = "";
+
+      function drawFavicon(bases) {
+        if (!favicon || !faviconCtx || !bases) return;
+        const key = bases.slice(-16);
+        if (key === lastFaviconKey) return;
+        lastFaviconKey = key;
+
+        faviconCtx.clearRect(0, 0, 64, 64);
+        faviconCtx.fillStyle = BG_COLOR;
+        faviconCtx.fillRect(0, 0, 64, 64);
+
+        const cells = 4;
+        const cell = 64 / cells;
+        const padded = key.padStart(cells * cells, "N").slice(-cells * cells);
+        for (let i = 0; i < padded.length; i++) {
+          const ch = padded[i];
+          const x = (i % cells) * cell;
+          const y = Math.floor(i / cells) * cell;
+          faviconCtx.fillStyle = baseColor(ch);
+          faviconCtx.fillRect(x, y, cell, cell);
+
+          faviconCtx.fillStyle = baseColor(complement(ch));
+          faviconCtx.beginPath();
+          faviconCtx.moveTo(x + cell, y);
+          faviconCtx.lineTo(x + cell, y + cell);
+          faviconCtx.lineTo(x, y + cell);
+          faviconCtx.closePath();
+          faviconCtx.fill();
+        }
+
+        faviconCtx.strokeStyle = BG_COLOR;
+        faviconCtx.lineWidth = 4;
+        faviconCtx.strokeRect(2, 2, 60, 60);
+        faviconCtx.strokeStyle = CURSOR_FG_COLOR;
+        faviconCtx.lineWidth = 3;
+        faviconCtx.beginPath();
+        faviconCtx.moveTo(48, 5);
+        faviconCtx.lineTo(48, 59);
+        faviconCtx.stroke();
+        favicon.href = faviconCanvas.toDataURL("image/png");
+      }
+
+      function browserChromeIndex() {
+        if (M.maxRevealed <= 0) return 0;
+        return Math.max(0, Math.min(M.maxRevealed - 1, M.n - 1));
+      }
+
+      function updateBrowserChrome(now) {
+        if (now - lastChromeUpdate < 180) return;
+        lastChromeUpdate = now;
+
+        if (!M.streamLive || M.complete || !M.n || !M.bases.length) {
+          if (document.title !== PAGE_TITLE) document.title = PAGE_TITLE;
+          lastTitleText = "";
+          if (favicon && defaultFaviconHref && favicon.href !== defaultFaviconHref) {
+            favicon.href = defaultFaviconHref;
+            lastFaviconKey = "";
+          }
+          return;
+        }
+
+        const idx = browserChromeIndex();
+        const titleBases = basesAround(idx, 2, 13);
+        if (titleBases) {
+          const titleText = `${uc(titleBases)} · ${PAGE_TITLE}`;
+          if (titleText !== lastTitleText) {
+            lastTitleText = titleText;
+            document.title = titleText;
+          }
+        }
+
+        const iconBases = basesAround(idx, 7, 8);
+        drawFavicon(iconBases);
+      }
+
       // --- view mode ---------------------------------------------------------
       let pinnedView = "helix"; // "helix" | "chars"
       let hoverPreviewSuppressed = false;
@@ -1035,8 +1138,9 @@
       let BASE_DOT = 3.2;
       let BAR_WIDTH = 2.2;
       let BACKBONE_WIDTH = 8;
-      let FONT = '400 11px "Andale Mono", "Andale Mono WT", monospace';
-      let CHAR_FONT = '400 33px "Andale Mono", "Andale Mono WT", monospace';
+      const FONT_FAMILY = '"BigBlueTerm437 Nerd Font", "BigBlueTermPlus Nerd Font", monospace';
+      let FONT = `400 11px ${FONT_FAMILY}`;
+      let CHAR_FONT = `400 33px ${FONT_FAMILY}`;
       let PHASE = (Math.PI * 2) / HELIX_PERIOD;
 
       let particles = [];
@@ -1146,8 +1250,8 @@
         HELIX_CURSOR_HALF = HELIX_AMP + BASE_DOT + 4;
         CHAR_CURSOR_HALF = Math.round(charPx * 0.52);
         animCursorHalf = cursorHalf(activeView());
-        FONT = `400 ${fontPx}px "Andale Mono", "Andale Mono WT", monospace`;
-        CHAR_FONT = `400 ${charPx}px "Andale Mono", "Andale Mono WT", monospace`;
+        FONT = `400 ${fontPx}px ${FONT_FAMILY}`;
+        CHAR_FONT = `400 ${charPx}px ${FONT_FAMILY}`;
         PHASE = (Math.PI * 2) / HELIX_PERIOD;
         ctx.font = FONT;
         initParticles();
@@ -1566,6 +1670,7 @@
 
       resize();
       connect();
+      setInterval(() => updateBrowserChrome(performance.now()), 180);
       requestAnimationFrame(draw);
     })();
   </script>
